@@ -210,13 +210,18 @@ func buildNode(ctx context.Context, n *node) error {
 			asmObjs = append(asmObjs, asmObj)
 		}
 
-		packArgs := []string{
-			"r",
-			objFile,
+		out := &bytes.Buffer{}
+		args := build.PackArgs{
+			WorkingDirectory: n.pkg.Dir,
+			Stdout:           out,
+			Stderr:           out,
+			Op:               build.Append,
+			ObjectFile:       objFile,
+			Names:            asmObjs,
 		}
-		packArgs = append(packArgs, asmObjs...)
-		err = runCmd(ctx, n.pkg.Dir, toolPack, nil, packArgs...)
+		err := build.DefaultTools.Pack(args)
 		if err != nil {
+			fmt.Fprint(os.Stderr, out)
 			return err
 		}
 	}

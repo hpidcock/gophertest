@@ -17,11 +17,6 @@ var (
 	nodeMap      = make(map[string]*node)
 	testPackages = make(map[string]*testPackage)
 	workDir      = ""
-	toolCompile  = path.Join(build.ToolDir, "compile")
-	toolLink     = path.Join(build.ToolDir, "link")
-	toolAsm      = path.Join(build.ToolDir, "asm")
-	toolPack     = path.Join(build.ToolDir, "pack")
-	toolCgo      = path.Join(build.ToolDir, "cgo")
 	srcDir       = ""
 	outFile      = ""
 	pkgDir       = path.Join(runtime.GOROOT(), "pkg")

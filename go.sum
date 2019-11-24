@@ -9,6 +9,8 @@ github.com/gophertest/build v0.0.0-20191124101335-fad8d897078b h1:CIIEZZ5MkrhRxc
 github.com/gophertest/build v0.0.0-20191124101335-fad8d897078b/go.mod h1:2IXxYH8f08Z35rtHf1QWx60lvwB6xdA6wO9PktB5TIc=
 github.com/gophertest/build v0.0.0-20191124102127-f9c5c47bf44f h1:RDCy2umOeyZmVWyfq241dkMdMWjSUTCu2eUpM1TDtP0=
 github.com/gophertest/build v0.0.0-20191124102127-f9c5c47bf44f/go.mod h1:2IXxYH8f08Z35rtHf1QWx60lvwB6xdA6wO9PktB5TIc=
+github.com/gophertest/build v0.0.0-20191124110418-a923af1adb01 h1:NKbqhGiJYDfa1I/GoqzQBAnSgc2j/geeS4gRgThtvFU=
+github.com/gophertest/build v0.0.0-20191124110418-a923af1adb01/go.mod h1:2IXxYH8f08Z35rtHf1QWx60lvwB6xdA6wO9PktB5TIc=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/testify v1.4.0/go.mod h1:j7eGeouHqKxXV5pUuKE4zz7dFj8WfuZ+81PSLYec5m4=
