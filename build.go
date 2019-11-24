@@ -9,6 +9,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/gophertest/build"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -119,18 +120,24 @@ func buildNode(ctx context.Context, n *node) error {
 		if err != nil {
 			return err
 		}
-		asmArgs := []string{
-			"-trimpath", n.workDir + "=>",
-			"-I", n.workDir,
-			"-I", path.Join(pkgDir, "include"),
-			"-D", "GOOS_" + buildCtx.GOOS,
-			"-D", "GOARCH_" + buildCtx.GOARCH,
-			"-gensymabis",
-			"-o", symabisFile,
+		out := &bytes.Buffer{}
+		args := build.AssembleArgs{
+			WorkingDirectory: n.pkg.Dir,
+			Files:            asmFiles,
+			Stdout:           out,
+			Stderr:           out,
+			TrimPath:         n.workDir + "=>",
+			IncludeDirs:      []string{n.workDir, path.Join(pkgDir, "include")},
+			Defines: []string{
+				"GOOS_" + buildCtx.GOOS,
+				"GOARCH_" + buildCtx.GOARCH,
+			},
+			GenSymABIs: true,
+			OutputFile: symabisFile,
 		}
-		asmArgs = append(asmArgs, asmFiles...)
-		err = runCmd(ctx, n.pkg.Dir, toolAsm, nil, asmArgs...)
+		err := build.DefaultTools.Assemble(args)
 		if err != nil {
+			fmt.Fprint(os.Stderr, out)
 			return err
 		}
 	}
@@ -150,37 +157,29 @@ func buildNode(ctx context.Context, n *node) error {
 		}
 	}
 	if len(files) > 0 {
-		compileArgs := []string{
-			"-o", objFile,
-			"-trimpath", n.workDir + "=>",
-			"-p", n.pkg.ImportPath,
-			"-importcfg", importConfigFile,
-			"-pack", "-c=4",
-		}
-		if stdLibrary {
-			compileArgs = append(compileArgs,
-				"-std",
-			)
+		out := &bytes.Buffer{}
+		args := build.CompileArgs{
+			WorkingDirectory:         n.pkg.Dir,
+			Files:                    files,
+			Stdout:                   out,
+			Stderr:                   out,
+			TrimPath:                 n.workDir + "=>",
+			Concurrency:              4,
+			PackageImportPath:        n.pkg.ImportPath,
+			ImportConfigFile:         importConfigFile,
+			CompilingStandardLibrary: stdLibrary,
+			CompilingRuntimeLibrary:  isRuntime,
+			Complete:                 isComplete,
+			Pack:                     true,
+			OutputFile:               objFile,
 		}
 		if asm {
-			compileArgs = append(compileArgs,
-				"-symabis", symabisFile,
-				"-asmhdr", asmImportFile,
-			)
+			args.SymABIsFile = symabisFile
+			args.AsmHeaderFile = asmImportFile
 		}
-		if isComplete {
-			compileArgs = append(compileArgs,
-				"-complete",
-			)
-		}
-		if isRuntime {
-			compileArgs = append(compileArgs,
-				"-+",
-			)
-		}
-		compileArgs = append(compileArgs, files...)
-		err = runCmd(ctx, n.pkg.Dir, toolCompile, nil, compileArgs...)
+		err := build.DefaultTools.Compile(args)
 		if err != nil {
+			fmt.Fprint(os.Stderr, out)
 			return err
 		}
 	}
@@ -189,17 +188,23 @@ func buildNode(ctx context.Context, n *node) error {
 		asmObjs := []string{}
 		for _, asmFile := range asmFiles {
 			asmObj := path.Join(n.workDir, strings.TrimSuffix(path.Base(asmFile), ".s")+".o")
-			asmArgs := []string{
-				"-trimpath", n.workDir + "=>",
-				"-I", n.workDir,
-				"-I", path.Join(pkgDir, "include"),
-				"-D", "GOOS_" + buildCtx.GOOS,
-				"-D", "GOARCH_" + buildCtx.GOARCH,
-				"-o", asmObj,
-				asmFile,
+			out := &bytes.Buffer{}
+			args := build.AssembleArgs{
+				WorkingDirectory: n.pkg.Dir,
+				Files:            []string{asmFile},
+				Stdout:           out,
+				Stderr:           out,
+				TrimPath:         n.workDir + "=>",
+				IncludeDirs:      []string{n.workDir, path.Join(pkgDir, "include")},
+				Defines: []string{
+					"GOOS_" + buildCtx.GOOS,
+					"GOARCH_" + buildCtx.GOARCH,
+				},
+				OutputFile: asmObj,
 			}
-			err = runCmd(ctx, n.pkg.Dir, toolAsm, nil, asmArgs...)
+			err := build.DefaultTools.Assemble(args)
 			if err != nil {
+				fmt.Fprint(os.Stderr, out)
 				return err
 			}
 			asmObjs = append(asmObjs, asmObj)
@@ -289,18 +294,21 @@ func link() error {
 		return err
 	}
 
-	linkArgs := []string{
-		"-v",
-		"-o", outFile,
-		"-importcfg", importConfigFile,
-		"-buildmode=exe",
-		"-extld=gcc",
-		mainNode.obj,
+	out := &bytes.Buffer{}
+	args := build.LinkArgs{
+		WorkingDirectory: exeDir,
+		Stdout:           out,
+		Stderr:           out,
+		BuildMode:        "exe",
+		ExternalLinker:   "gcc",
+		ImportConfigFile: importConfigFile,
+		OutputFile:       outFile,
+		Files:            []string{mainNode.obj},
 	}
-	err = runCmd(context.Background(), exeDir, toolLink, nil, linkArgs...)
+	build.DefaultTools.Link(args)
 	if err != nil {
+		fmt.Fprint(os.Stderr, out)
 		return err
 	}
-
 	return nil
 }
