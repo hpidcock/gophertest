@@ -213,7 +213,7 @@ func all(concurrent int) {
 				fmt.Fprintf(os.Stderr, "%v", err)
 				os.Exit(1)
 			}
-			fmt.Fprintf(os.Stdout, "%-4s\t%-40s\t%.3fs\n", status, t.importPath, duration.Seconds())
+			fmt.Fprintf(os.Stdout, "%-4s\t%s\t%.3fs\n", status, t.importPath, duration.Seconds())
 			mutex <- struct{}{}
 			slot <- struct{}{}
 		}()
