@@ -1,13 +1,17 @@
 package main
 
 import (
-	"go/build"
+	"fmt"
+	"log"
 	"path/filepath"
+
+	"github.com/hpidcock/gophertest/buildctx"
 )
 
 type node struct {
 	path         string
-	pkg          *build.Package
+	originalDir  string
+	pkg          *buildctx.Package
 	test         bool
 	testPath     string
 	dependencies []*node
@@ -15,6 +19,7 @@ type node struct {
 	obj          string
 	workDir      string
 	mark         bool
+	isXTest      bool
 }
 
 func add(path string, searchDir string, test bool) error {
@@ -28,32 +33,34 @@ func add(path string, searchDir string, test bool) error {
 	if n.test {
 		return nil
 	}
-	bp, err := buildCtx.Import(path, searchDir, build.FindOnly)
-	if err != nil {
-		return err
+	bp, ok := pkgMap[path]
+	if !ok {
+		return fmt.Errorf("missing import %q", path)
 	}
 	if bp.Dir != n.pkg.Dir {
 		if bp.Goroot {
 			return addPackage(path, searchDir, false)
 		}
-		//log.Printf("%s is ambigious with %s", bp.Dir, n.pkg.Dir)
+		log.Printf("%s is ambigious with %s", bp.Dir, n.pkg.Dir)
 		return nil
 	}
 	return nil
 }
 
 func addPackage(path string, searchDir string, test bool) error {
-	bp, err := buildCtx.Import(path, searchDir, build.ImportComment)
-	if err != nil {
-		return err
+	bp, ok := pkgMap[path]
+	if !ok {
+		return fmt.Errorf("missing import %q", path)
 	}
 	if !filepath.HasPrefix(bp.Dir, srcDir) {
 		searchDir = bp.Dir
 	}
+
 	n := &node{
-		path: path,
-		pkg:  bp,
-		test: test && len(bp.TestGoFiles) > 0,
+		path:        path,
+		originalDir: bp.Dir,
+		pkg:         bp,
+		test:        test && len(bp.TestGoFiles) > 0,
 	}
 	if test {
 		n.testPath = path
@@ -74,23 +81,41 @@ func addPackage(path string, searchDir string, test bool) error {
 		}
 	}
 	if test && len(bp.XTestGoFiles) > 0 {
-		tp := &build.Package{
-			Dir:           bp.Dir,
-			Name:          bp.Name + "_test",
-			ImportPath:    bp.ImportPath + "_test",
-			Root:          bp.Root,
-			SrcRoot:       bp.SrcRoot,
-			PkgRoot:       bp.PkgRoot,
-			PkgTargetRoot: bp.PkgTargetRoot,
-			TestGoFiles:   bp.XTestGoFiles,
-			TestImports:   bp.XTestImports,
-			TestImportPos: bp.XTestImportPos,
-		}
+		tp := *bp
+		tp.Name = bp.Name + "_test"
+		tp.ImportPath = bp.ImportPath + "_test"
+		tp.TestGoFiles = bp.XTestGoFiles
+		tp.TestImports = bp.XTestImports
+		tp.CFiles = nil
+		tp.CXXFiles = nil
+		tp.CgoCFLAGS = nil
+		tp.CgoCPPFLAGS = nil
+		tp.CgoFFLAGS = nil
+		tp.CgoFiles = nil
+		tp.CgoLDFLAGS = nil
+		tp.CgoPkgConfig = nil
+		tp.CompiledGoFiles = nil
+		tp.FFiles = nil
+		tp.GoFiles = nil
+		tp.HFiles = nil
+		tp.IgnoredGoFiles = nil
+		tp.ImportMap = nil
+		tp.Imports = nil
+		tp.MFiles = nil
+		tp.SFiles = nil
+		tp.Shlib = ""
+		tp.SwigCXXFiles = nil
+		tp.SwigFiles = nil
+		tp.SysoFiles = nil
+		tp.XTestGoFiles = nil
+		tp.XTestImports = nil
 		nodeMap[path+"_test"] = &node{
-			path:     path + "_test",
-			pkg:      tp,
-			test:     true,
-			testPath: path,
+			path:        path + "_test",
+			originalDir: bp.Dir,
+			pkg:         &tp,
+			test:        true,
+			testPath:    path,
+			isXTest:     true,
 		}
 		for _, dep := range tp.TestImports {
 			err := add(dep, searchDir, false)
