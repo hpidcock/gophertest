@@ -17,6 +17,8 @@ type Target struct {
 	ImportPath string
 	Directory  string
 
+	InitFunc   string
+	XInitFunc  string
 	Main       string
 	Tests      []Test
 	Benchmarks []Test
@@ -75,6 +77,8 @@ type target struct {
 	tests []testing.InternalTest
 	benchmarks []testing.InternalBenchmark
 	examples []testing.InternalExample
+	initFunc func()
+	xInitFunc func()
 	testMain func(*testing.M)
 }
 
@@ -87,6 +91,8 @@ var targets = []target{
 
 		directory: {{.Directory | printf "%q"}},
 
+		initFunc: {{.InitFunc}},
+		xInitFunc: {{.XInitFunc}},
 		testMain: {{.Main}},
 
 		tests: []testing.InternalTest{
@@ -132,6 +138,8 @@ func init() {
 	if selectedTarget == nil {
 		selectedTarget = &target{
 			importPath: pkg,
+			initFunc: func(){},
+			xInitFunc: func(){},
 			testMain: defaultMain,
 		}
 	}
@@ -144,6 +152,9 @@ func defaultMain(m *testing.M) {
 }
 
 func main() {
+	selectedTarget.initFunc()
+	selectedTarget.xInitFunc()
+
 	m := testing.MainStart(testdeps.TestDeps{}, selectedTarget.tests, selectedTarget.benchmarks, nil)
 	selectedTarget.testMain(m)
 }

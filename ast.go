@@ -109,3 +109,25 @@ func isTestMain(fd *ast.FuncDecl) bool {
 	}
 	return false
 }
+
+func isGopherTestInit(fd *ast.FuncDecl) bool {
+	if fd.Name.String() != "GopherTestInit" {
+		return false
+	}
+	if fd.Recv != nil {
+		return false
+	}
+	if fd.Type.Results != nil {
+		params := fd.Type.Results.List
+		if len(params) != 0 {
+			return false
+		}
+	}
+	if fd.Type.Params != nil {
+		params := fd.Type.Params.List
+		if len(params) != 0 {
+			return false
+		}
+	}
+	return true
+}

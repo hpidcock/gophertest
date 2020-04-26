@@ -4,30 +4,37 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"go/build"
+	gobuild "go/build"
 	"io"
 	"io/ioutil"
 	"log"
 	"os"
 	"path"
 	"runtime"
+
+	"github.com/gophertest/build"
+	"github.com/hpidcock/gophertest/buildctx"
+	"github.com/hpidcock/gophertest/runner"
 )
 
 var (
+	pkgMap       = make(map[string]*buildctx.Package)
 	nodeMap      = make(map[string]*node)
 	testPackages = make(map[string]*testPackage)
 	workDir      = ""
 	srcDir       = ""
 	outFile      = ""
 	pkgDir       = path.Join(runtime.GOROOT(), "pkg")
-	buildCtx     = build.Default
+	buildCtx     = gobuild.Default
 )
 
 var (
-	flagStdin  = flag.Bool("stdin", false, "Read package names from stdin")
-	flagFile   = flag.String("f", "", "Read package names from file")
-	flagPkgDir = flag.String("p", "", "Group package directory (default is working directory)")
-	flagOut    = flag.String("o", "gopher.test", "Output binary")
+	flagStdin       = flag.Bool("stdin", false, "Read package names from stdin")
+	flagFile        = flag.String("f", "", "Read package names from file")
+	flagPkgDir      = flag.String("p", "", "Group package directory (default is working directory)")
+	flagOut         = flag.String("o", "gopher.test", "Output binary")
+	flagKeepWorkDir = flag.Bool("keep-work-dir", false, "Prints out work dir and doesn't delete it")
+	flagLogBuild    = flag.Bool("x", false, "Log build commands")
 )
 
 func main() {
@@ -38,6 +45,10 @@ func main() {
 	// For now we don't support cgo.
 	buildCtx.CgoEnabled = false
 	buildCtx.UseAllFiles = false
+	err = os.Setenv("CGO_ENABLED", "0")
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	wd, err := os.Getwd()
 	if err != nil {
@@ -60,6 +71,14 @@ func main() {
 	workDir, err = ioutil.TempDir("", "gophertest")
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if *flagKeepWorkDir {
+		log.Printf("workDir=%s", workDir)
+	}
+
+	if *flagLogBuild {
+		build.DebugLog = true
 	}
 
 	remaining := flag.NArg()
@@ -101,11 +120,23 @@ func main() {
 		os.Exit(-1)
 	}
 
+	fullPackages := append([]string(nil), packages...)
+	fullPackages = append(fullPackages, runner.Deps...)
+	buildPkgs, err := buildctx.ImportAll(srcDir, "gc", fullPackages)
+	for _, pkg := range buildPkgs {
+		pkgMap[pkg.ImportPath] = pkg
+	}
+
 	for _, pkg := range packages {
 		err := add(pkg, srcDir, true)
 		if err != nil {
 			log.Fatal(err)
 		}
+	}
+
+	err = patchTests()
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	err = generateMain()
@@ -125,9 +156,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	err = os.RemoveAll(workDir)
-	if err != nil {
-		log.Fatal(err)
+	if !*flagKeepWorkDir {
+		err = os.RemoveAll(workDir)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 }
 

@@ -4,6 +4,8 @@ go 1.12
 
 require (
 	github.com/davecgh/go-spew v1.1.1
-	github.com/gophertest/build v0.0.0-20191124110418-a923af1adb01
-	golang.org/x/sync v0.0.0-20190423024810-112230192c58
+	github.com/go-toolsmith/astcopy v1.0.0
+	github.com/gophertest/build v0.0.0-20200426044738-e58ceb65f7bd
+	golang.org/x/sync v0.0.0-20190911185100-cd5d95a43a6e
+	golang.org/x/tools v0.0.0-20200423205358-59e73619c742
 )

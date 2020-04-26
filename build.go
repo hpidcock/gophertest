@@ -50,13 +50,6 @@ func buildNode(ctx context.Context, n *node) error {
 		return err
 	}
 
-	if buildCtx.CgoEnabled {
-		if n.pkg.Goroot {
-			n.obj = n.pkg.PkgObj
-			return nil
-		}
-	}
-
 	if len(n.pkg.CgoFiles) > 0 {
 		return fmt.Errorf("cannot build CgoFiles %q", n.path)
 	}
@@ -137,7 +130,7 @@ func buildNode(ctx context.Context, n *node) error {
 		}
 		err := build.DefaultTools.Assemble(args)
 		if err != nil {
-			fmt.Fprint(os.Stderr, out)
+			fmt.Fprintf(os.Stderr, "failed generating sym abis: %v", out)
 			return err
 		}
 	}
@@ -179,7 +172,7 @@ func buildNode(ctx context.Context, n *node) error {
 		}
 		err := build.DefaultTools.Compile(args)
 		if err != nil {
-			fmt.Fprint(os.Stderr, out)
+			fmt.Fprintf(os.Stderr, "failed compiling: %v", out)
 			return err
 		}
 	}
@@ -204,7 +197,7 @@ func buildNode(ctx context.Context, n *node) error {
 			}
 			err := build.DefaultTools.Assemble(args)
 			if err != nil {
-				fmt.Fprint(os.Stderr, out)
+				fmt.Fprintf(os.Stderr, "failed assembling: %v", out)
 				return err
 			}
 			asmObjs = append(asmObjs, asmObj)
@@ -221,7 +214,7 @@ func buildNode(ctx context.Context, n *node) error {
 		}
 		err := build.DefaultTools.Pack(args)
 		if err != nil {
-			fmt.Fprint(os.Stderr, out)
+			fmt.Fprintf(os.Stderr, "failed packing: %v", out)
 			return err
 		}
 	}
@@ -234,9 +227,9 @@ func importConfig(n *node) []byte {
 	cfg := &bytes.Buffer{}
 	fmt.Fprintf(cfg, "# import config\n")
 	for _, dep := range n.dependencies {
-		if dep.path != dep.pkg.ImportPath {
-			fmt.Fprintf(cfg, "importmap %s=%s\n", dep.path, dep.pkg.ImportPath)
-		}
+		//if dep.path != dep.pkg.ImportPath {
+		fmt.Fprintf(cfg, "importmap %s=%s\n", dep.path, dep.pkg.ImportPath)
+		//}
 	}
 	for _, dep := range n.dependencies {
 		fmt.Fprintf(cfg, "packagefile %s=%s\n", dep.pkg.ImportPath, dep.obj)

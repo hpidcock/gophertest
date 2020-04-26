@@ -2,26 +2,34 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"go/ast"
-	"go/build"
 	"go/parser"
 	"go/token"
 	"io/ioutil"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 
+	"golang.org/x/sync/errgroup"
+
+	"github.com/hpidcock/gophertest/buildctx"
+	"github.com/hpidcock/gophertest/deferredinit"
 	"github.com/hpidcock/gophertest/runner"
 )
 
 type testPackage struct {
 	path  string
+	dir   string
 	test  *node
 	xtest *node
 
 	testMain string
+	hasInit  bool
+	hasXInit bool
 
 	benchmarks []benchmark
 	tests      []test
@@ -42,13 +50,16 @@ func findTests(n *node) error {
 	if pkg == nil {
 		pkg = &testPackage{
 			path: n.testPath,
+			dir:  n.originalDir,
 		}
 	}
 
+	isXTest := false
 	if n.testPath == n.path {
 		pkg.test = n
 	} else if n.testPath == strings.TrimSuffix(n.path, "_test") {
 		pkg.xtest = n
+		isXTest = true
 	} else {
 		return fmt.Errorf("invalid test package %q", n.path)
 	}
@@ -75,12 +86,109 @@ func findTests(n *node) error {
 					return fmt.Errorf("ambigious TestMain in %q", n.path)
 				}
 				pkg.testMain = n.path
+			case isGopherTestInit(fd) && isXTest:
+				pkg.hasXInit = true
+			case isGopherTestInit(fd) && !isXTest:
+				pkg.hasInit = true
 			}
 		}
 	}
 
-	if len(pkg.tests) > 0 || len(pkg.benchmarks) > 0 {
-		testPackages[n.testPath] = pkg
+	testPackages[n.testPath] = pkg
+	return nil
+}
+
+type patchedPackage struct {
+	path  string
+	test  *node
+	xtest *node
+}
+
+func patchTests() error {
+	testImportPaths := []string{}
+	pkgs := map[string]*patchedPackage{}
+	for _, node := range nodeMap {
+		if !node.test {
+			continue
+		}
+		pkg := pkgs[node.testPath]
+		if pkg == nil {
+			pkg = &patchedPackage{
+				path: node.testPath,
+			}
+			pkgs[node.testPath] = pkg
+			testImportPaths = append(testImportPaths, node.testPath)
+		}
+		if node.isXTest {
+			pkg.xtest = node
+		} else {
+			pkg.test = node
+		}
+	}
+
+	parsedPackages, err := deferredinit.LoadPackages(srcDir, testImportPaths)
+	if err != nil {
+		return err
+	}
+
+	sem := make(chan struct{}, 4)
+	for i := 0; i < 4; i++ {
+		sem <- struct{}{}
+	}
+
+	eg, ctx := errgroup.WithContext(context.Background())
+	for _, p := range pkgs {
+		pkg := p
+		eg.Go(func() error {
+			select {
+			case <-sem:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			defer func() {
+				sem <- struct{}{}
+			}()
+
+			rewriteDir := filepath.Join(workDir, "rewrites", pkg.path)
+			err := os.MkdirAll(rewriteDir, 0700)
+			if err != nil {
+				return err
+			}
+			dir := ""
+			if pkg.test != nil {
+				dir = pkg.test.originalDir
+			} else if pkg.xtest != nil {
+				dir = pkg.xtest.originalDir
+			}
+			rewrittenPkgs, err := deferredinit.RewriteTestPackages(dir, parsedPackages[pkg.path], rewriteDir)
+			if err != nil {
+				return err
+			}
+			if len(rewrittenPkgs) > 0 {
+				if pkg.test != nil {
+					pkg.test.pkg.Dir = rewriteDir
+				}
+				if pkg.xtest != nil {
+					pkg.xtest.pkg.Dir = rewriteDir
+				}
+				for _, v := range rewrittenPkgs {
+					if pkg.test != nil && v.Path == pkg.test.path {
+						pkg.test.pkg.TestImports = v.TestImports
+						pkg.test.pkg.TestGoFiles = append(pkg.test.pkg.TestGoFiles, v.AddedTestFiles...)
+					}
+					if pkg.xtest != nil && v.Path == pkg.xtest.path {
+						pkg.xtest.pkg.TestImports = v.TestImports
+						pkg.xtest.pkg.TestGoFiles = append(pkg.xtest.pkg.TestGoFiles, v.AddedTestFiles...)
+					}
+				}
+			}
+			return nil
+		})
+	}
+
+	err = eg.Wait()
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -104,15 +212,14 @@ func generateMain() error {
 	}
 	ctx := runner.Context{}
 	for _, pkg := range testPackages {
+		if len(pkg.tests) == 0 && len(pkg.benchmarks) == 0 {
+			continue
+		}
 		t := runner.Target{
 			ImportPath: pkg.path,
 			TestName:   nextID(),
 			XTestName:  nextID(),
-		}
-		if pkg.test != nil {
-			t.Directory = pkg.test.pkg.Dir
-		} else if pkg.xtest != nil {
-			t.Directory = pkg.xtest.pkg.Dir
+			Directory:  pkg.dir,
 		}
 		switch {
 		case pkg.test != nil && pkg.test.path == pkg.testMain:
@@ -124,6 +231,18 @@ func generateMain() error {
 		default:
 			t.Main = "defaultMain"
 		}
+
+		t.InitFunc = "func(){}"
+		t.XInitFunc = "func(){}"
+		if pkg.test != nil && pkg.hasInit {
+			t.ImportTest = true
+			t.InitFunc = t.TestName + ".GopherTestInit"
+		}
+		if pkg.xtest != nil && pkg.hasXInit {
+			t.ImportXTest = true
+			t.XInitFunc = t.XTestName + ".GopherTestInit"
+		}
+
 		for _, testFunc := range pkg.tests {
 			switch {
 			case pkg.test != nil && pkg.test.path == testFunc.path:
@@ -201,7 +320,7 @@ func generateMain() error {
 
 	nodeMap["main"] = &node{
 		path: "main",
-		pkg: &build.Package{
+		pkg: &buildctx.Package{
 			Dir:        srcDir,
 			Name:       "main",
 			ImportPath: "main",
