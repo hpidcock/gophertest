@@ -12,8 +12,6 @@ Go-for-test speeds up testing large Go projects by building once and running tes
 
 To be able to test your project it must currently conform to these requirements:
 - Build without Cgo (pure go)
-- Flags should be registered and parsed inside of TestMain
-- Avoid mutating shared variables via init/package level variable init (move these into a TestMain function)
 
 ## Installing
 
