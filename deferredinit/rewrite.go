@@ -31,6 +31,7 @@ type RewritePkg struct {
 	Path           string
 	TestImports    []string
 	AddedTestFiles []string
+	Complexity     int
 }
 
 func LoadPackages(dir string, importPaths []string) (map[string][]*packages.Package, error) {
@@ -79,7 +80,7 @@ func RewriteTestPackages(dir string, pkgs []*packages.Package, outDir string) ([
 			continue
 		}
 
-		newFiles, testImports, err := transformPkg(pkg, pkg.Fset, outDir)
+		newFiles, testImports, complexity, err := transformPkg(pkg, pkg.Fset, outDir)
 		if err != nil {
 			return nil, err
 		}
@@ -88,30 +89,54 @@ func RewriteTestPackages(dir string, pkgs []*packages.Package, outDir string) ([
 			Path:           pkg.PkgPath,
 			TestImports:    testImports,
 			AddedTestFiles: newFiles,
+			Complexity:     complexity,
 		})
 	}
 	return transformed, nil
 }
 
-func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]string, []string, error) {
+func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]string, []string, int, error) {
 	assignments := make([]initAssign, 0, len(pkg.TypesInfo.InitOrder))
 
-	identToOrder := map[*ast.Ident]int{}
+	complexity := 0
+
+	posToOrder := map[token.Pos]int{}
 	for i, v := range pkg.TypesInfo.InitOrder {
 		for _, lhs := range v.Lhs {
-			for _, f := range pkg.Syntax {
-				astutil.Apply(f, func(c *astutil.Cursor) bool {
-					if c.Node() != nil {
-						if ident, ok := c.Node().(*ast.Ident); ok {
-							if lhs.Pos() == ident.Pos() {
-								identToOrder[ident] = i
-							}
-						}
-					}
-					return true
-				}, nil)
-			}
+			posToOrder[lhs.Pos()] = i
 		}
+	}
+
+	identToOrder := map[*ast.Ident]int{}
+	for _, f := range pkg.Syntax {
+		astutil.Apply(f, func(c *astutil.Cursor) bool {
+			if c.Node() == nil {
+				return true
+			}
+			complexity++
+			switch t := c.Node().(type) {
+			case *ast.Ident:
+				if order, ok := posToOrder[t.Pos()]; ok {
+					identToOrder[t] = order
+				}
+			case *ast.FuncDecl:
+				if t.Body != nil {
+					complexity += len(t.Body.List)
+				}
+				return false
+			case *ast.StructType:
+				if t.Fields != nil {
+					complexity += len(t.Fields.List)
+				}
+				return false
+			case *ast.InterfaceType:
+				if t.Methods != nil {
+					complexity += len(t.Methods.List)
+				}
+				return false
+			}
+			return true
+		}, nil)
 	}
 
 	var testImports = map[string]struct{}{}
@@ -121,15 +146,15 @@ func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]
 		if !strings.HasSuffix(file.Name(), "_test.go") {
 			of, err := os.OpenFile(path.Join(outDir, path.Base(file.Name())), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 			err = format.Node(of, fset, f)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 			err = of.Close()
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 			continue
 		}
@@ -262,7 +287,7 @@ func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]
 			for _, imp := range para {
 				importPath, err := strconv.Unquote(imp.Path.Value)
 				if err != nil {
-					return nil, nil, err
+					return nil, nil, 0, err
 				}
 				testImports[importPath] = struct{}{}
 			}
@@ -270,16 +295,16 @@ func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]
 
 		of, err := os.OpenFile(path.Join(outDir, path.Base(file.Name())), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
 		err = format.Node(of, fset, f)
 		if err != nil {
 			log.Printf("failed to format %s for %s", path.Base(file.Name()), pkg.PkgPath)
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
 		err = of.Close()
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
 	}
 
@@ -316,7 +341,7 @@ func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]
 			for _, imp := range para {
 				importPath, err := strconv.Unquote(imp.Path.Value)
 				if err != nil {
-					return nil, nil, err
+					return nil, nil, 0, err
 				}
 				testImports[importPath] = struct{}{}
 			}
@@ -324,15 +349,15 @@ func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]
 
 		of, err := os.OpenFile(path.Join(outDir, newFile), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
 		err = format.Node(of, fset, g)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
 		err = of.Close()
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
 
 		newFiles = append(newFiles, newFile)
@@ -343,7 +368,7 @@ func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]
 		uniqueTestImports = append(uniqueTestImports, k)
 	}
 
-	return newFiles, uniqueTestImports, nil
+	return newFiles, uniqueTestImports, complexity, nil
 }
 
 func resolveType(decl types.Type, pkg *packages.Package, fset *token.FileSet, f *ast.File, pos token.Position) ast.Expr {

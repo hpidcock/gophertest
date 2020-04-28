@@ -24,6 +24,7 @@ import (
 type testPackage struct {
 	path  string
 	dir   string
+	name  string
 	test  *node
 	xtest *node
 
@@ -51,6 +52,7 @@ func findTests(n *node) error {
 		pkg = &testPackage{
 			path: n.testPath,
 			dir:  n.originalDir,
+			name: strings.TrimSuffix(n.pkg.Name, "_test"),
 		}
 	}
 
@@ -131,8 +133,8 @@ func patchTests() error {
 		return err
 	}
 
-	sem := make(chan struct{}, 4)
-	for i := 0; i < 4; i++ {
+	sem := make(chan struct{}, 8)
+	for i := 0; i < 8; i++ {
 		sem <- struct{}{}
 	}
 
@@ -175,10 +177,12 @@ func patchTests() error {
 					if pkg.test != nil && v.Path == pkg.test.path {
 						pkg.test.pkg.TestImports = v.TestImports
 						pkg.test.pkg.TestGoFiles = append(pkg.test.pkg.TestGoFiles, v.AddedTestFiles...)
+						pkg.test.testComplexity = v.Complexity
 					}
 					if pkg.xtest != nil && v.Path == pkg.xtest.path {
 						pkg.xtest.pkg.TestImports = v.TestImports
 						pkg.xtest.pkg.TestGoFiles = append(pkg.xtest.pkg.TestGoFiles, v.AddedTestFiles...)
+						pkg.xtest.testComplexity = v.Complexity
 					}
 				}
 			}
@@ -217,10 +221,18 @@ func generateMain() error {
 		}
 		t := runner.Target{
 			ImportPath: pkg.path,
+			Name:       pkg.name,
 			TestName:   nextID(),
 			XTestName:  nextID(),
 			Directory:  pkg.dir,
 		}
+		if pkg.test != nil {
+			t.TestComplexity += pkg.test.testComplexity
+		}
+		if pkg.xtest != nil {
+			t.TestComplexity += pkg.xtest.testComplexity
+		}
+
 		switch {
 		case pkg.test != nil && pkg.test.path == pkg.testMain:
 			t.ImportTest = true

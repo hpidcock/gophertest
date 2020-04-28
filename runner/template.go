@@ -14,6 +14,7 @@ type Target struct {
 	ImportXTest bool
 	XTestName   string
 
+	Name       string
 	ImportPath string
 	Directory  string
 
@@ -22,6 +23,8 @@ type Target struct {
 	Main       string
 	Tests      []Test
 	Benchmarks []Test
+
+	TestComplexity int
 }
 
 type Test struct {
@@ -36,6 +39,7 @@ var Deps = []string{
 	"os",
 	"os/exec",
 	"path",
+	"sort",
 	"strconv",
 	"testing",
 	"testing/internal/testdeps",
@@ -53,6 +57,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"sort"
 	"strconv"
 	"testing"
 	"testing/internal/testdeps"
@@ -72,6 +77,7 @@ const pkgEnvName = "GOPHERTEST_PKG"
 const concurrentEnvName = "GOPHERTEST_CONCURRENT"
 
 type target struct {
+	name string
 	importPath string
 	directory string
 	tests []testing.InternalTest
@@ -80,6 +86,7 @@ type target struct {
 	initFunc func()
 	xInitFunc func()
 	testMain func(*testing.M)
+	complexity int
 }
 
 var selectedTarget *target
@@ -87,13 +94,15 @@ var selectedTarget *target
 var targets = []target{
 {{range .Targets}}
 	target{
+		name: {{.Name | printf "%q"}},
 		importPath: {{.ImportPath | printf "%q"}},
-
 		directory: {{.Directory | printf "%q"}},
 
 		initFunc: {{.InitFunc}},
 		xInitFunc: {{.XInitFunc}},
 		testMain: {{.Main}},
+
+		complexity: {{.TestComplexity}},
 
 		tests: []testing.InternalTest{
 {{range .Tests}}
@@ -114,6 +123,17 @@ func init() {
 	var err error
 	pkg := os.Getenv(pkgEnvName)
 	if pkg == "" {
+		bin := os.Args[0]
+		binDir := path.Dir(bin)
+		for _, t := range targets {
+			if binDir == t.directory {
+				selectedTarget = &t
+				break
+			}
+		}
+	}
+
+	if selectedTarget == nil && pkg == "" {
 		concurrent := 1
 		if s := os.Getenv(concurrentEnvName); s != "" {
 			concurrent, err = strconv.Atoi(s)
@@ -125,13 +145,21 @@ func init() {
 				concurrent = 1
 			}
 		}
+		if concurrent > 1 {
+			sort.Slice(targets, func(i, j int) bool {
+				// Sort from most complex to least.
+				return targets[i].complexity > targets[j].complexity
+			})
+		}
 		all(concurrent)
 	}
 
-	for _, t := range targets {
-		if t.importPath == pkg {
-			selectedTarget = &t
-			break
+	if selectedTarget == nil && pkg != "" {
+		for _, t := range targets {
+			if t.importPath == pkg {
+				selectedTarget = &t
+				break
+			}
 		}
 	}
 
@@ -185,7 +213,34 @@ func all(concurrent int) {
 		for _, arg := range args {
 			cmdArgs = append(cmdArgs, os.ExpandEnv(arg))
 		}
-		cmd := exec.Command(bin, cmdArgs...)
+		wd, err := os.Stat(t.directory)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v", err)
+			os.Exit(1)
+		} else if !wd.IsDir() {
+			fmt.Fprintf(os.Stderr, "%q is not a directory", t.directory)
+			os.Exit(1)
+		}
+		testBin := path.Join(t.directory, fmt.Sprintf("%s.test", t.name))
+		_, err = os.Stat(testBin)
+		if os.IsNotExist(err) {
+		} else if err != nil {
+			fmt.Fprintf(os.Stderr, "%v", err)
+			os.Exit(1)
+		} else {
+			err = os.Remove(testBin)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%v", err)
+				os.Exit(1)
+			}
+		}
+		err = os.Symlink(bin, testBin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v", err)
+			os.Exit(1)
+		}
+		cmd := exec.Command(testBin, cmdArgs...)
+		cmd.Dir = t.directory
 		cmd.Env = os.Environ()
 		buffer := &bytes.Buffer{}
 		if concurrent == 1 {
@@ -195,14 +250,14 @@ func all(concurrent int) {
 			cmd.Stdout = buffer
 			cmd.Stderr = buffer
 		}
-		wd, err := os.Stat(t.directory)
-		if err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "%v", err)
-			os.Exit(1)
-		} else if wd.IsDir() {
-			cmd.Dir = t.directory
-		}
 		go func() {
+			defer func() {
+				err := os.Remove(testBin)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "%v", err)
+					os.Exit(1)
+				}
+			}()
 			start := time.Now()
 			err := cmd.Run()
 			failed := false

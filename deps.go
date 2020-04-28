@@ -9,17 +9,18 @@ import (
 )
 
 type node struct {
-	path         string
-	originalDir  string
-	pkg          *buildctx.Package
-	test         bool
-	testPath     string
-	dependencies []*node
-	dependants   []*node
-	obj          string
-	workDir      string
-	mark         bool
-	isXTest      bool
+	path           string
+	originalDir    string
+	pkg            *buildctx.Package
+	test           bool
+	testPath       string
+	dependencies   []*node
+	dependants     []*node
+	obj            string
+	workDir        string
+	mark           bool
+	isXTest        bool
+	testComplexity int
 }
 
 func add(path string, searchDir string, test bool) error {
