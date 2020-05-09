@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	gobuild "go/build"
@@ -11,6 +12,8 @@ import (
 	"os"
 	"path"
 	"runtime"
+
+	"github.com/hpidcock/gophertest/dag"
 
 	"github.com/gophertest/build"
 	"github.com/hpidcock/gophertest/buildctx"
@@ -123,39 +126,68 @@ func main() {
 	fullPackages := append([]string(nil), packages...)
 	fullPackages = append(fullPackages, runner.Deps...)
 	buildPkgs, err := buildctx.ImportAll(srcDir, "gc", fullPackages)
-	for _, pkg := range buildPkgs {
-		pkgMap[pkg.ImportPath] = pkg
+
+	testPackages := map[string]struct{}{}
+	for _, importPath := range packages {
+		testPackages[importPath] = struct{}{}
 	}
 
-	for _, pkg := range packages {
-		err := add(pkg, srcDir, true)
+	d := dag.NewDAG()
+	for _, pkg := range buildPkgs {
+		_, includeTests := testPackages[pkg.ImportPath]
+		_, err := d.Add(pkg, includeTests)
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
 
-	err = patchTests()
+	err = d.CheckComplete()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	err = generateMain()
+	err = d.VisitAllFromLeft(context.Background(), dag.VisitorFunc(func(ctx context.Context, n *dag.Node, dir dag.VisitDirection) error {
+		fmt.Println(n.ImportPath)
+		return nil
+	}))
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	linkDeps()
+	/*
+		for _, pkg := range buildPkgs {
+			pkgMap[pkg.ImportPath] = pkg
+		}
 
-	err = buildAll()
-	if err != nil {
-		log.Fatal(err)
-	}
+		for _, pkg := range packages {
+			err := add(pkg, srcDir, true)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
 
-	err = link()
-	if err != nil {
-		log.Fatal(err)
-	}
+		err = patchTests()
+		if err != nil {
+			log.Fatal(err)
+		}
 
+		err = generateMain()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		linkDeps()
+
+		err = buildAll()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		err = link()
+		if err != nil {
+			log.Fatal(err)
+		}
+	*/
 	if !*flagKeepWorkDir {
 		err = os.RemoveAll(workDir)
 		if err != nil {
