@@ -5,13 +5,13 @@ import (
 	"log"
 	"path/filepath"
 
-	"github.com/hpidcock/gophertest/buildctx"
+	"github.com/hpidcock/gophertest/packages"
 )
 
 type node struct {
 	path           string
 	originalDir    string
-	pkg            *buildctx.Package
+	pkg            *packages.Package
 	test           bool
 	testPath       string
 	dependencies   []*node

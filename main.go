@@ -13,15 +13,16 @@ import (
 	"path"
 	"runtime"
 
-	"github.com/hpidcock/gophertest/dag"
-
 	"github.com/gophertest/build"
-	"github.com/hpidcock/gophertest/buildctx"
+
+	"github.com/hpidcock/gophertest/cacher"
+	"github.com/hpidcock/gophertest/dag"
+	"github.com/hpidcock/gophertest/packages"
 	"github.com/hpidcock/gophertest/runner"
 )
 
 var (
-	pkgMap       = make(map[string]*buildctx.Package)
+	pkgMap       = make(map[string]*packages.Package)
 	nodeMap      = make(map[string]*node)
 	testPackages = make(map[string]*testPackage)
 	workDir      = ""
@@ -29,6 +30,7 @@ var (
 	outFile      = ""
 	pkgDir       = path.Join(runtime.GOROOT(), "pkg")
 	buildCtx     = gobuild.Default
+	tools        = build.DefaultTools
 )
 
 var (
@@ -86,10 +88,10 @@ func main() {
 
 	remaining := flag.NArg()
 	inputTypes := 0
-	packages := []string{}
+	testPackages := []string{}
 	if *flagStdin {
 		inputTypes++
-		packages, err = readPackages(os.Stdin)
+		testPackages, err = readPackages(os.Stdin)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -100,7 +102,7 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		packages, err = readPackages(f)
+		testPackages, err = readPackages(f)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -111,30 +113,30 @@ func main() {
 	}
 	if remaining > 0 {
 		inputTypes++
-		packages = os.Args[len(os.Args)-remaining:]
+		testPackages = os.Args[len(os.Args)-remaining:]
 	}
 	if inputTypes != 1 {
 		fmt.Fprintf(os.Stderr, "only one of -f or -stdin or command line packages can be passed")
 		flag.PrintDefaults()
 		os.Exit(-1)
 	}
-	if len(packages) == 0 {
+	if len(testPackages) == 0 {
 		fmt.Fprintf(os.Stderr, "no packages to build")
 		os.Exit(-1)
 	}
 
-	fullPackages := append([]string(nil), packages...)
+	fullPackages := append([]string(nil), testPackages...)
 	fullPackages = append(fullPackages, runner.Deps...)
-	buildPkgs, err := buildctx.ImportAll(srcDir, "gc", fullPackages)
+	buildPkgs, err := packages.ImportAll(buildCtx, srcDir, fullPackages)
 
-	testPackages := map[string]struct{}{}
-	for _, importPath := range packages {
-		testPackages[importPath] = struct{}{}
+	testPackagesMap := map[string]struct{}{}
+	for _, importPath := range testPackages {
+		testPackagesMap[importPath] = struct{}{}
 	}
 
 	d := dag.NewDAG()
 	for _, pkg := range buildPkgs {
-		_, includeTests := testPackages[pkg.ImportPath]
+		_, includeTests := testPackagesMap[pkg.ImportPath]
 		_, err := d.Add(pkg, includeTests)
 		if err != nil {
 			log.Fatal(err)
@@ -146,13 +148,28 @@ func main() {
 		log.Fatal(err)
 	}
 
-	err = d.VisitAllFromLeft(context.Background(), dag.VisitorFunc(func(ctx context.Context, n *dag.Node, dir dag.VisitDirection) error {
-		fmt.Println(n.ImportPath)
+	err = d.VisitAllFromRight(context.Background(), &cacher.Cacher{
+		BuildCtx: buildCtx,
+		Tools:    tools,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	d.VisitAllFromLeft(context.Background(), dag.VisitorFunc(func(ctx context.Context, node *dag.Node) error {
+		if node.ImportPath == "github.com/juju/juju/featuretests" {
+			fmt.Println(node.Meta[0].(*cacher.CacheMeta).BuildID)
+		}
+		return nil
+	}))
+
+	/*err = d.VisitAllFromRight(context.Background(), dag.VisitorFunc(func(ctx context.Context, n *dag.Node) error {
+		fmt.Printf("%s %s\n", n.ImportPath, n.Meta[0].(*cacher.Cache).BuildID)
 		return nil
 	}))
 	if err != nil {
 		log.Fatal(err)
-	}
+	}*/
 
 	/*
 		for _, pkg := range buildPkgs {

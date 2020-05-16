@@ -5,13 +5,13 @@ import (
 )
 
 type Visitor interface {
-	Visit(context.Context, *Node, VisitDirection) error
+	Visit(context.Context, *Node) error
 }
 
-type VisitorFunc func(context.Context, *Node, VisitDirection) error
+type VisitorFunc func(context.Context, *Node) error
 
-func (f VisitorFunc) Visit(ctx context.Context, n *Node, direction VisitDirection) error {
-	return f(ctx, n, direction)
+func (f VisitorFunc) Visit(ctx context.Context, n *Node) error {
+	return f(ctx, n)
 }
 
 type VisitDirection int

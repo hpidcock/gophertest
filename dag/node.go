@@ -13,19 +13,19 @@ type Node struct {
 }
 
 type NodeBits struct {
-	Name string
-
+	Name      string
+	Tests     bool
 	SourceDir string
 	RootDir   string
 	Goroot    bool
+	Standard  bool
+	GoFiles   []GoFile
+	SFiles    []SFile
+	Imports   []Import
+	ImportMap map[string]string
 
-	Shlib    string
-	Standard bool
-
-	GoFiles []GoFile
-	SFiles  []SFile
-
-	Imports []Import
+	Shlib string
+	Meta  []interface{}
 }
 
 type Import struct {

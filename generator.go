@@ -16,8 +16,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/hpidcock/gophertest/buildctx"
 	"github.com/hpidcock/gophertest/deferredinit"
+	"github.com/hpidcock/gophertest/packages"
 	"github.com/hpidcock/gophertest/runner"
 )
 
@@ -332,7 +332,7 @@ func generateMain() error {
 
 	nodeMap["main"] = &node{
 		path: "main",
-		pkg: &buildctx.Package{
+		pkg: &packages.Package{
 			Dir:        srcDir,
 			Name:       "main",
 			ImportPath: "main",
