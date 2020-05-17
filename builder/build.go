@@ -23,8 +23,7 @@ type Builder struct {
 	BuildCtx gobuild.Context
 	Tools    build.Tools
 
-	CacheDir string
-	WorkDir  string
+	WorkDir string
 }
 
 type BuildInfo struct {
@@ -260,6 +259,9 @@ func (b *Builder) build(ctx context.Context, node *dag.Node, bi *BuildInfo) erro
 	files := []string{}
 	for _, f := range node.GoFiles {
 		files = append(files, f.Filename)
+		if !node.Tests && f.Test {
+			return fmt.Errorf("package %q contains unused tests", node.ImportPath)
+		}
 	}
 
 	out := &bytes.Buffer{}

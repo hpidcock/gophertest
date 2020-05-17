@@ -1,6 +1,8 @@
 package util
 
 import (
+	"go/build"
+	"os"
 	"path"
 
 	"github.com/nightlyone/lockfile"
@@ -16,4 +18,17 @@ func LockDirectory(dir string) (lockfile.Lockfile, error) {
 		return lockFile, err
 	}
 	return lockFile, lockFile.TryLock()
+}
+
+func CacheDir(buildCtx build.Context) (string, error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	dir := path.Join(cacheDir, buildCtx.GOOS+"_"+buildCtx.GOARCH)
+	err = os.MkdirAll(dir, 0777)
+	if err != nil {
+		return "", err
+	}
+	return dir, nil
 }

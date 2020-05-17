@@ -1,4 +1,4 @@
-package puller
+package storer
 
 import (
 	"context"
@@ -23,6 +23,10 @@ type Storer struct {
 }
 
 func (s *Storer) Visit(ctx context.Context, node *dag.Node) error {
+	if node.ImportPath == "main" {
+		return nil
+	}
+
 	rebuilt := false
 	for _, meta := range node.Meta {
 		switch m := meta.(type) {

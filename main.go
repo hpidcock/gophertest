@@ -15,11 +15,16 @@ import (
 
 	"github.com/gophertest/build"
 
+	"github.com/hpidcock/gophertest/builder"
 	"github.com/hpidcock/gophertest/cache/hasher"
 	"github.com/hpidcock/gophertest/cache/puller"
+	"github.com/hpidcock/gophertest/cache/storer"
 	"github.com/hpidcock/gophertest/dag"
+	"github.com/hpidcock/gophertest/deferredinit"
+	"github.com/hpidcock/gophertest/linker"
 	"github.com/hpidcock/gophertest/packages"
 	"github.com/hpidcock/gophertest/runner"
+	"github.com/hpidcock/gophertest/util"
 )
 
 var (
@@ -27,7 +32,7 @@ var (
 	nodeMap      = make(map[string]*node)
 	testPackages = make(map[string]*testPackage)
 	workDir      = ""
-	cacheDir 	 = ""
+	cacheDir     = ""
 	srcDir       = ""
 	outFile      = ""
 	pkgDir       = path.Join(runtime.GOROOT(), "pkg")
@@ -58,6 +63,11 @@ func main() {
 	}
 
 	wd, err := os.Getwd()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	cacheDir, err = util.CacheDir(buildCtx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -162,61 +172,68 @@ func main() {
 		BuildCtx: buildCtx,
 		Tools:    tools,
 		WorkDir:  workDir,
-		CacheDir: 
+		CacheDir: cacheDir,
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	d.VisitAllFromLeft(context.Background(), dag.VisitorFunc(func(ctx context.Context, node *dag.Node) error {
-		if node.ImportPath == "github.com/juju/juju/featuretests" {
-			fmt.Println(node.Meta[0].(*hasher.HashMeta).BuildID)
-		}
-		return nil
-	}))
-
-	/*err = d.VisitAllFromRight(context.Background(), dag.VisitorFunc(func(ctx context.Context, n *dag.Node) error {
-		fmt.Printf("%s %s\n", n.ImportPath, n.Meta[0].(*cacher.Cache).BuildID)
-		return nil
-	}))
+	di := &deferredinit.DeferredIniter{
+		BuildCtx:  buildCtx,
+		Tools:     tools,
+		WorkDir:   workDir,
+		SourceDir: srcDir,
+	}
+	err = d.VisitAllFromRight(context.Background(), dag.VisitorFunc(di.CollectPackages))
 	if err != nil {
 		log.Fatal(err)
-	}*/
+	}
 
-	/*
-		for _, pkg := range buildPkgs {
-			pkgMap[pkg.ImportPath] = pkg
-		}
+	err = di.LoadPackages()
+	if err != nil {
+		log.Fatal(err)
+	}
 
-		for _, pkg := range packages {
-			err := add(pkg, srcDir, true)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
+	err = d.VisitAllFromRight(context.Background(), dag.VisitorFunc(di.Rewrite))
+	if err != nil {
+		log.Fatal(err)
+	}
 
-		err = patchTests()
-		if err != nil {
-			log.Fatal(err)
-		}
+	err = d.CheckComplete()
+	if err != nil {
+		log.Fatal(err)
+	}
 
-		err = generateMain()
-		if err != nil {
-			log.Fatal(err)
-		}
+	// mainGenerator
 
-		linkDeps()
+	err = d.VisitAllFromRight(context.Background(), &builder.Builder{
+		BuildCtx: buildCtx,
+		Tools:    tools,
+		WorkDir:  workDir,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
-		err = buildAll()
-		if err != nil {
-			log.Fatal(err)
-		}
+	err = d.VisitAllFromRight(context.Background(), &linker.Linker{
+		BuildCtx: buildCtx,
+		Tools:    tools,
+		WorkDir:  workDir,
+		OutFile:  outFile,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
-		err = link()
-		if err != nil {
-			log.Fatal(err)
-		}
-	*/
+	err = d.VisitAllFromRight(context.Background(), &storer.Storer{
+		BuildCtx: buildCtx,
+		Tools:    tools,
+		CacheDir: cacheDir,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	if !*flagKeepWorkDir {
 		err = os.RemoveAll(workDir)
 		if err != nil {
