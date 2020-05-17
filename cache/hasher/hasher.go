@@ -18,7 +18,7 @@ import (
 	"github.com/hpidcock/gophertest/version"
 )
 
-type HasherMeta struct {
+type HashMeta struct {
 	BuildID string
 }
 
@@ -74,7 +74,7 @@ func (c *Hasher) Visit(ctx context.Context, node *dag.Node) error {
 		}
 		for _, meta := range imported.Meta {
 			switch m := meta.(type) {
-			case *HasherMeta:
+			case *HashMeta:
 				provenance = append(provenance, m.BuildID)
 			}
 		}
@@ -133,7 +133,7 @@ func (c *Hasher) Visit(ctx context.Context, node *dag.Node) error {
 		}
 	}
 
-	cache := &HasherMeta{
+	cache := &HashMeta{
 		BuildID: hashToString(s.Sum(nil)),
 	}
 	node.Meta = append(node.Meta, cache)

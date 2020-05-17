@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/gophertest/build"
-	"github.com/hpidcock/gophertest/cacher"
+	"github.com/hpidcock/gophertest/cache/hasher"
 	"github.com/hpidcock/gophertest/dag"
 )
 
@@ -58,7 +58,7 @@ func (b *Builder) Visit(ctx context.Context, node *dag.Node) error {
 	bi := &BuildInfo{}
 	for _, meta := range node.Meta {
 		switch m := meta.(type) {
-		case *cacher.CacheMeta:
+		case *hasher.HashMeta:
 			bi.BuildID = m.BuildID
 		}
 	}
@@ -67,7 +67,7 @@ func (b *Builder) Visit(ctx context.Context, node *dag.Node) error {
 	}
 
 	bi.WorkDir = path.Join(append([]string{b.WorkDir, "build"}, strings.Split(node.ImportPath, "/")...)...)
-	err = os.MkdirAll(bi.WorkDir, 0755)
+	err = os.MkdirAll(bi.WorkDir, 0777)
 	if err != nil {
 		return err
 	}
@@ -178,7 +178,7 @@ func (b *Builder) genSymABIs(ctx context.Context, node *dag.Node, bi *BuildInfo)
 	for _, f := range node.SFiles {
 		asmFiles = append(asmFiles, f.Filename)
 	}
-	err := ioutil.WriteFile(bi.ASMImportFile, []byte(""), 0600)
+	err := ioutil.WriteFile(bi.ASMImportFile, []byte(""), 0666)
 	if err != nil {
 		return err
 	}
@@ -303,7 +303,7 @@ func (b *Builder) writeImportConfig(ctx context.Context, node *dag.Node, bi *Bui
 		fmt.Fprintf(cfg, "packagefile %s=%s\n", dep.ImportPath, dep.Shlib)
 		dep.Mutex.Unlock()
 	}
-	err := ioutil.WriteFile(bi.ImportConfigFile, cfg.Bytes(), 0600)
+	err := ioutil.WriteFile(bi.ImportConfigFile, cfg.Bytes(), 0666)
 	if err != nil {
 		return err
 	}

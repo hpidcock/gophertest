@@ -109,7 +109,7 @@ func buildNode(ctx context.Context, n *node) error {
 	}
 
 	if asm {
-		err = ioutil.WriteFile(asmImportFile, []byte(""), 0600)
+		err = ioutil.WriteFile(asmImportFile, []byte(""), 0666)
 		if err != nil {
 			return err
 		}
@@ -135,7 +135,7 @@ func buildNode(ctx context.Context, n *node) error {
 		}
 	}
 
-	err = ioutil.WriteFile(importConfigFile, importConfig(n), 0600)
+	err = ioutil.WriteFile(importConfigFile, importConfig(n), 0666)
 	if err != nil {
 		return err
 	}
@@ -281,13 +281,13 @@ func link() error {
 	mainNode := nodeMap["main"]
 
 	exeDir := path.Join(workDir, "exe")
-	err := os.Mkdir(exeDir, 0700)
+	err := os.Mkdir(exeDir, 0777)
 	if err != nil {
 		return err
 	}
 
 	importConfigFile := path.Join(exeDir, "importcfg.link")
-	err = ioutil.WriteFile(importConfigFile, importConfigLink(), 0600)
+	err = ioutil.WriteFile(importConfigFile, importConfigLink(), 0666)
 	if err != nil {
 		return err
 	}

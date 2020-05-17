@@ -144,7 +144,7 @@ func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]
 	for _, f := range pkg.Syntax {
 		file := pkg.Fset.File(f.Package)
 		if !strings.HasSuffix(file.Name(), "_test.go") {
-			of, err := os.OpenFile(path.Join(outDir, path.Base(file.Name())), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+			of, err := os.OpenFile(path.Join(outDir, path.Base(file.Name())), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0666)
 			if err != nil {
 				return nil, nil, 0, err
 			}
@@ -293,7 +293,7 @@ func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]
 			}
 		}
 
-		of, err := os.OpenFile(path.Join(outDir, path.Base(file.Name())), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+		of, err := os.OpenFile(path.Join(outDir, path.Base(file.Name())), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0666)
 		if err != nil {
 			return nil, nil, 0, err
 		}
@@ -347,7 +347,7 @@ func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]
 			}
 		}
 
-		of, err := os.OpenFile(path.Join(outDir, newFile), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+		of, err := os.OpenFile(path.Join(outDir, newFile), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0666)
 		if err != nil {
 			return nil, nil, 0, err
 		}

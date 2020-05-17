@@ -15,7 +15,8 @@ import (
 
 	"github.com/gophertest/build"
 
-	"github.com/hpidcock/gophertest/cacher"
+	"github.com/hpidcock/gophertest/cache/hasher"
+	"github.com/hpidcock/gophertest/cache/puller"
 	"github.com/hpidcock/gophertest/dag"
 	"github.com/hpidcock/gophertest/packages"
 	"github.com/hpidcock/gophertest/runner"
@@ -26,6 +27,7 @@ var (
 	nodeMap      = make(map[string]*node)
 	testPackages = make(map[string]*testPackage)
 	workDir      = ""
+	cacheDir 	 = ""
 	srcDir       = ""
 	outFile      = ""
 	pkgDir       = path.Join(runtime.GOROOT(), "pkg")
@@ -148,7 +150,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	err = d.VisitAllFromRight(context.Background(), &cacher.Cacher{
+	err = d.VisitAllFromRight(context.Background(), &hasher.Hasher{
 		BuildCtx: buildCtx,
 		Tools:    tools,
 	})
@@ -156,9 +158,19 @@ func main() {
 		log.Fatal(err)
 	}
 
+	err = d.VisitAllFromRight(context.Background(), &puller.Puller{
+		BuildCtx: buildCtx,
+		Tools:    tools,
+		WorkDir:  workDir,
+		CacheDir: 
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	d.VisitAllFromLeft(context.Background(), dag.VisitorFunc(func(ctx context.Context, node *dag.Node) error {
 		if node.ImportPath == "github.com/juju/juju/featuretests" {
-			fmt.Println(node.Meta[0].(*cacher.CacheMeta).BuildID)
+			fmt.Println(node.Meta[0].(*hasher.HashMeta).BuildID)
 		}
 		return nil
 	}))

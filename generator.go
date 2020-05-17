@@ -152,7 +152,7 @@ func patchTests() error {
 			}()
 
 			rewriteDir := filepath.Join(workDir, "rewrites", pkg.path)
-			err := os.MkdirAll(rewriteDir, 0700)
+			err := os.MkdirAll(rewriteDir, 0777)
 			if err != nil {
 				return err
 			}
@@ -309,12 +309,12 @@ func generateMain() error {
 	}
 
 	srcDir := path.Join(workDir, "main")
-	err = os.Mkdir(srcDir, 0700)
+	err = os.Mkdir(srcDir, 0777)
 	if err != nil {
 		return err
 	}
 
-	err = ioutil.WriteFile(path.Join(srcDir, "main.go"), b.Bytes(), 0664)
+	err = ioutil.WriteFile(path.Join(srcDir, "main.go"), b.Bytes(), 0666)
 	if err != nil {
 		return err
 	}
