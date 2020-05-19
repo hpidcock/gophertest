@@ -22,22 +22,21 @@ import (
 	"github.com/hpidcock/gophertest/dag"
 	"github.com/hpidcock/gophertest/deferredinit"
 	"github.com/hpidcock/gophertest/linker"
+	"github.com/hpidcock/gophertest/maingen"
+	"github.com/hpidcock/gophertest/maingen/runner"
 	"github.com/hpidcock/gophertest/packages"
-	"github.com/hpidcock/gophertest/runner"
 	"github.com/hpidcock/gophertest/util"
 )
 
 var (
-	pkgMap       = make(map[string]*packages.Package)
-	nodeMap      = make(map[string]*node)
-	testPackages = make(map[string]*testPackage)
-	workDir      = ""
-	cacheDir     = ""
-	srcDir       = ""
-	outFile      = ""
-	pkgDir       = path.Join(runtime.GOROOT(), "pkg")
-	buildCtx     = gobuild.Default
-	tools        = build.DefaultTools
+	pkgMap   = make(map[string]*packages.Package)
+	workDir  = ""
+	cacheDir = ""
+	srcDir   = ""
+	outFile  = ""
+	pkgDir   = path.Join(runtime.GOROOT(), "pkg")
+	buildCtx = gobuild.Default
+	tools    = build.DefaultTools
 )
 
 var (
@@ -204,7 +203,21 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// mainGenerator
+	gen := &maingen.Generator{
+		BuildCtx: buildCtx,
+		Tools:    tools,
+		WorkDir:  workDir,
+	}
+
+	err = d.VisitAllFromRight(context.Background(), dag.VisitorFunc(gen.FindTests))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	err = gen.GenerateMain(context.Background(), d)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	err = d.VisitAllFromRight(context.Background(), &builder.Builder{
 		BuildCtx: buildCtx,

@@ -1,6 +1,8 @@
 package dag
 
 import (
+	"context"
+	"io"
 	"sync"
 )
 
@@ -34,12 +36,23 @@ type Import struct {
 }
 
 type GoFile struct {
-	Dir      string
-	Filename string
-	Test     bool
+	Dir       string
+	Filename  string
+	Test      bool
+	Generator Generator
 }
 
 type SFile struct {
 	Dir      string
 	Filename string
+}
+
+type Generator interface {
+	Generate(context.Context, *Node, GoFile, io.WriteCloser) error
+}
+
+type GeneratorFunc func(context.Context, *Node, GoFile, io.WriteCloser) error
+
+func (g GeneratorFunc) Generate(ctx context.Context, node *Node, goFile GoFile, writer io.WriteCloser) error {
+	return g(ctx, node, goFile, writer)
 }

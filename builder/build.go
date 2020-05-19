@@ -262,6 +262,19 @@ func (b *Builder) build(ctx context.Context, node *dag.Node, bi *BuildInfo) erro
 		if !node.Tests && f.Test {
 			return fmt.Errorf("package %q contains unused tests", node.ImportPath)
 		}
+
+		if f.Generator != nil {
+			of, err := os.Create(path.Join(f.Dir, f.Filename))
+			if err != nil {
+				return err
+			}
+			err = f.Generator.Generate(ctx, node, f, of)
+			if err != nil {
+				of.Close()
+				return err
+			}
+			of.Close()
+		}
 	}
 
 	out := &bytes.Buffer{}

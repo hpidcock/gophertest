@@ -24,7 +24,7 @@ type Target struct {
 	Tests      []Test
 	Benchmarks []Test
 
-	TestComplexity int
+	TestComplexity int64
 }
 
 type Test struct {
@@ -86,7 +86,7 @@ type target struct {
 	initFunc func()
 	xInitFunc func()
 	testMain func(*testing.M)
-	complexity int
+	complexity int64
 }
 
 var selectedTarget *target
