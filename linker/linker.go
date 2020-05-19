@@ -12,6 +12,7 @@ import (
 
 	"github.com/gophertest/build"
 	"github.com/hpidcock/gophertest/dag"
+	"github.com/pkg/errors"
 )
 
 type Linker struct {
@@ -36,7 +37,7 @@ func (l *Linker) Visit(ctx context.Context, node *dag.Node) error {
 		if _, err := os.Stat(node.Shlib); os.IsNotExist(err) {
 			return fmt.Errorf("missing shlib for %q", node.ImportPath)
 		} else if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		l.packageMapMutex.Lock()
 		defer l.packageMapMutex.Unlock()
@@ -55,13 +56,13 @@ func (l *Linker) Visit(ctx context.Context, node *dag.Node) error {
 	exeDir := path.Join(l.WorkDir, "exe")
 	err := os.Mkdir(exeDir, 0777)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 
 	importConfigFile := path.Join(exeDir, "importcfg.link")
 	err = ioutil.WriteFile(importConfigFile, l.importConfigLink(), 0666)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 
 	out := &bytes.Buffer{}
@@ -78,7 +79,7 @@ func (l *Linker) Visit(ctx context.Context, node *dag.Node) error {
 	l.Tools.Link(args)
 	if err != nil {
 		fmt.Fprint(os.Stderr, out)
-		return err
+		return errors.WithStack(err)
 	}
 	return nil
 }

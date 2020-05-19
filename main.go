@@ -14,6 +14,7 @@ import (
 	"runtime"
 
 	"github.com/gophertest/build"
+	"github.com/pkg/errors"
 
 	"github.com/hpidcock/gophertest/builder"
 	"github.com/hpidcock/gophertest/cache/hasher"
@@ -49,6 +50,13 @@ var (
 )
 
 func main() {
+	err := Main()
+	if err != nil {
+		fmt.Printf("%+v", err)
+	}
+}
+
+func Main() error {
 	var err error
 
 	buildCtx.GOARCH = env("GOARCH", buildCtx.GOARCH)
@@ -58,17 +66,17 @@ func main() {
 	buildCtx.UseAllFiles = false
 	err = os.Setenv("CGO_ENABLED", "0")
 	if err != nil {
-		log.Fatal(err)
+		return errors.WithStack(err)
 	}
 
 	wd, err := os.Getwd()
 	if err != nil {
-		log.Fatal(err)
+		return errors.WithStack(err)
 	}
 
 	cacheDir, err = util.CacheDir(buildCtx)
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "creating cache dir")
 	}
 
 	flag.Parse()
@@ -86,7 +94,7 @@ func main() {
 
 	workDir, err = ioutil.TempDir("", "gophertest")
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "creating work directory")
 	}
 
 	if *flagKeepWorkDir {
@@ -104,22 +112,22 @@ func main() {
 		inputTypes++
 		testPackages, err = readPackages(os.Stdin)
 		if err != nil {
-			log.Fatal(err)
+			return errors.Wrap(err, "reading packages from stdin")
 		}
 	}
 	if *flagFile != "" {
 		inputTypes++
 		f, err := os.Open(*flagFile)
 		if err != nil {
-			log.Fatal(err)
+			return errors.Wrapf(err, "opening package file %q", *flagFile)
 		}
 		testPackages, err = readPackages(f)
 		if err != nil {
-			log.Fatal(err)
+			return errors.Wrapf(err, "reading packages from %q", *flagFile)
 		}
 		err = f.Close()
 		if err != nil {
-			log.Fatal(err)
+			return errors.Wrap(err, "closing file")
 		}
 	}
 	if remaining > 0 {
@@ -150,13 +158,13 @@ func main() {
 		_, includeTests := testPackagesMap[pkg.ImportPath]
 		_, err := d.Add(pkg, includeTests)
 		if err != nil {
-			log.Fatal(err)
+			return errors.Wrapf(err, "adding %q to dag", pkg.ImportPath)
 		}
 	}
 
 	err = d.CheckComplete()
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "dag incomplete")
 	}
 
 	err = d.VisitAllFromRight(context.Background(), &hasher.Hasher{
@@ -164,7 +172,7 @@ func main() {
 		Tools:    tools,
 	})
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "hashing source")
 	}
 
 	err = d.VisitAllFromRight(context.Background(), &puller.Puller{
@@ -174,7 +182,7 @@ func main() {
 		CacheDir: cacheDir,
 	})
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "pulling from cache")
 	}
 
 	di := &deferredinit.DeferredIniter{
@@ -185,22 +193,22 @@ func main() {
 	}
 	err = d.VisitAllFromRight(context.Background(), dag.VisitorFunc(di.CollectPackages))
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "finding tests")
 	}
 
 	err = di.LoadPackages()
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "loading tests")
 	}
 
 	err = d.VisitAllFromRight(context.Background(), dag.VisitorFunc(di.Rewrite))
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "rewriting tests")
 	}
 
 	err = d.CheckComplete()
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "dag incomplete")
 	}
 
 	gen := &maingen.Generator{
@@ -211,12 +219,12 @@ func main() {
 
 	err = d.VisitAllFromRight(context.Background(), dag.VisitorFunc(gen.FindTests))
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "finding tests")
 	}
 
 	err = gen.GenerateMain(context.Background(), d)
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "generating main")
 	}
 
 	err = d.VisitAllFromRight(context.Background(), &builder.Builder{
@@ -225,7 +233,7 @@ func main() {
 		WorkDir:  workDir,
 	})
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "compiling")
 	}
 
 	err = d.VisitAllFromRight(context.Background(), &linker.Linker{
@@ -235,7 +243,7 @@ func main() {
 		OutFile:  outFile,
 	})
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "linking")
 	}
 
 	err = d.VisitAllFromRight(context.Background(), &storer.Storer{
@@ -244,15 +252,17 @@ func main() {
 		CacheDir: cacheDir,
 	})
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "updating cache")
 	}
 
 	if !*flagKeepWorkDir {
 		err = os.RemoveAll(workDir)
 		if err != nil {
-			log.Fatal(err)
+			return errors.Wrap(err, "cleaning work dir")
 		}
 	}
+
+	return nil
 }
 
 func readPackages(r io.Reader) ([]string, error) {
@@ -264,7 +274,7 @@ func readPackages(r io.Reader) ([]string, error) {
 		if err == io.EOF {
 			break
 		} else if err != nil {
-			return nil, err
+			return nil, errors.WithStack(err)
 		}
 		line = append(line, buf...)
 		if isPrefix {

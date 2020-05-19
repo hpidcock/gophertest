@@ -9,6 +9,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/hpidcock/gophertest/packages"
+	"github.com/pkg/errors"
 )
 
 type DAG struct {
@@ -273,7 +274,7 @@ func (d *DAG) CheckComplete() error {
 		}
 		node.Mutex.Unlock()
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 	}
 
@@ -285,7 +286,7 @@ func (d *DAG) CheckComplete() error {
 		}
 		node.Mutex.Unlock()
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 	}
 
@@ -297,7 +298,7 @@ func (d *DAG) CheckComplete() error {
 		}
 		node.Mutex.Unlock()
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 	}
 
@@ -309,7 +310,7 @@ func (d *DAG) CheckComplete() error {
 	}))
 	d.mutex.Lock()
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 
 	if int(countRight) != len(d.nodes) {
@@ -324,7 +325,7 @@ func (d *DAG) CheckComplete() error {
 	}))
 	d.mutex.Lock()
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 
 	if int(countLeft) != len(d.nodes) {
@@ -415,7 +416,7 @@ func (d *DAG) visitAll(ctx context.Context,
 
 	err := eg.Wait()
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 
 	d.mutex.Lock()

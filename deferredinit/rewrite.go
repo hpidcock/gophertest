@@ -23,6 +23,7 @@ import (
 	"github.com/go-toolsmith/astcopy"
 	"github.com/gophertest/build"
 	"github.com/hpidcock/gophertest/dag"
+	"github.com/pkg/errors"
 )
 
 type initAssign struct {
@@ -83,7 +84,7 @@ func (d *DeferredIniter) LoadPackages() error {
 
 	pkgs, err := packages.Load(config, importPaths...)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 	for _, pkg := range pkgs {
 		if !strings.HasSuffix(pkg.ID, ".test]") {
@@ -125,12 +126,12 @@ func (d *DeferredIniter) Rewrite(ctx context.Context, node *dag.Node) error {
 	outDir := path.Join(d.WorkDir, "rewrite", node.ImportPath)
 	err := os.MkdirAll(outDir, 0777)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 
 	newFiles, testImports, err := d.transformPkg(ctx, pkg, outDir)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 
 	// Patch file paths for changed files. Add missing ones.
@@ -169,7 +170,7 @@ func (d *DeferredIniter) Rewrite(ctx context.Context, node *dag.Node) error {
 	for importPath := range importsToAdd {
 		imp, err := d.findDependency(ctx, node, importPath)
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		} else if imp == nil {
 			return fmt.Errorf("could not find import %q in import tree of %q", importPath, node.ImportPath)
 		}
@@ -198,7 +199,7 @@ func (d *DeferredIniter) findDependency(ctx context.Context, node *dag.Node, imp
 		found, err := d.findDependency(ctx, imp.Node, importPath)
 		imp.Mutex.Unlock()
 		if err != nil {
-			return nil, err
+			return nil, errors.WithStack(err)
 		}
 		return found, nil
 	}
@@ -405,7 +406,7 @@ func (d *DeferredIniter) transformPkg(ctx context.Context, pkg *packages.Package
 			for _, imp := range para {
 				importPath, err := strconv.Unquote(imp.Path.Value)
 				if err != nil {
-					return nil, nil, err
+					return nil, nil, errors.WithStack(err)
 				}
 				testImports[importPath] = struct{}{}
 			}
@@ -414,16 +415,16 @@ func (d *DeferredIniter) transformPkg(ctx context.Context, pkg *packages.Package
 		newFile := path.Base(file.Name())
 		of, err := os.OpenFile(path.Join(outDir, newFile), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0666)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, errors.WithStack(err)
 		}
 		err = format.Node(of, pkg.Fset, f)
 		if err != nil {
 			log.Printf("failed to format %s for %s", newFile, pkg.PkgPath)
-			return nil, nil, err
+			return nil, nil, errors.WithStack(err)
 		}
 		err = of.Close()
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, errors.WithStack(err)
 		}
 
 		newFiles = append(newFiles, newFile)
@@ -470,15 +471,15 @@ func (d *DeferredIniter) transformPkg(ctx context.Context, pkg *packages.Package
 
 		of, err := os.OpenFile(path.Join(outDir, newFile), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0666)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, errors.WithStack(err)
 		}
 		err = format.Node(of, pkg.Fset, g)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, errors.WithStack(err)
 		}
 		err = of.Close()
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, errors.WithStack(err)
 		}
 
 		newFiles = append(newFiles, newFile)

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/gophertest/build"
+	"github.com/pkg/errors"
 
 	"github.com/hpidcock/gophertest/dag"
 	"github.com/hpidcock/gophertest/version"
@@ -33,7 +34,7 @@ func (c *Hasher) Visit(ctx context.Context, node *dag.Node) error {
 
 	goCompilerVersion, err := c.Tools.Version()
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 
 	_, err = fmt.Fprintf(s, "%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%t",
@@ -50,7 +51,7 @@ func (c *Hasher) Visit(ctx context.Context, node *dag.Node) error {
 		strings.Join(c.BuildCtx.BuildTags, ":"),
 		c.BuildCtx.CgoEnabled)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 
 	_, err = fmt.Fprintf(s, "%s:%s:%s:%s:%t:%t:%t",
@@ -62,7 +63,7 @@ func (c *Hasher) Visit(ctx context.Context, node *dag.Node) error {
 		node.Standard,
 		node.Tests)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 	provenance = append(provenance, hashToString(s.Sum(nil)))
 
@@ -85,19 +86,19 @@ func (c *Hasher) Visit(ctx context.Context, node *dag.Node) error {
 		s := sha256.New()
 		_, err := fmt.Fprintf(s, "%s:%s:%t\n", goFile.Dir, goFile.Filename, goFile.Test)
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		f, err := os.OpenFile(path.Join(goFile.Dir, goFile.Filename), os.O_RDONLY, 0)
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		_, err = io.Copy(s, f)
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		err = f.Close()
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		provenance = append(provenance, hashToString(s.Sum(nil)))
 	}
@@ -106,19 +107,19 @@ func (c *Hasher) Visit(ctx context.Context, node *dag.Node) error {
 		s := sha256.New()
 		_, err := fmt.Fprintf(s, "%s:%s\n", sFile.Dir, sFile.Filename)
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		f, err := os.OpenFile(path.Join(sFile.Dir, sFile.Filename), os.O_RDONLY, 0)
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		_, err = io.Copy(s, f)
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		err = f.Close()
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		provenance = append(provenance, hashToString(s.Sum(nil)))
 	}
@@ -129,7 +130,7 @@ func (c *Hasher) Visit(ctx context.Context, node *dag.Node) error {
 	for _, p := range provenance {
 		_, err := fmt.Fprintln(s, p)
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 	}
 

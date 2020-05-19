@@ -13,6 +13,7 @@ import (
 	"github.com/gophertest/build"
 	"github.com/hpidcock/gophertest/cache/hasher"
 	"github.com/hpidcock/gophertest/dag"
+	"github.com/pkg/errors"
 )
 
 type BuildMeta struct {
@@ -94,13 +95,13 @@ func (b *Builder) Visit(ctx context.Context, node *dag.Node) error {
 		for _, v := range node.GoFiles {
 			err = os.Symlink(path.Join(v.Dir, v.Filename), path.Join(bi.WorkDir, v.Filename))
 			if err != nil {
-				return err
+				return errors.WithStack(err)
 			}
 		}
 		for _, v := range node.SFiles {
 			err = os.Symlink(path.Join(v.Dir, v.Filename), path.Join(bi.WorkDir, v.Filename))
 			if err != nil {
-				return err
+				return errors.WithStack(err)
 			}
 		}
 		bi.CompileSourceDir = bi.WorkDir
@@ -136,19 +137,19 @@ func (b *Builder) Visit(ctx context.Context, node *dag.Node) error {
 	if bi.HasASM {
 		err = b.genSymABIs(ctx, node, bi)
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 	}
 
 	err = b.build(ctx, node, bi)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 
 	if bi.HasASM {
 		err = b.asmBuild(ctx, node, bi)
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 	}
 
@@ -162,7 +163,7 @@ func (b *Builder) Visit(ctx context.Context, node *dag.Node) error {
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed writing build id: %v", out)
-		return err
+		return errors.WithStack(err)
 	}
 
 	node.Shlib = bi.ObjFile
@@ -179,7 +180,7 @@ func (b *Builder) genSymABIs(ctx context.Context, node *dag.Node, bi *BuildInfo)
 	}
 	err := ioutil.WriteFile(bi.ASMImportFile, []byte(""), 0666)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 	out := &bytes.Buffer{}
 	args := build.AssembleArgs{
@@ -200,7 +201,7 @@ func (b *Builder) genSymABIs(ctx context.Context, node *dag.Node, bi *BuildInfo)
 	err = b.Tools.Assemble(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed generating sym abis: %v", out)
-		return err
+		return errors.WithStack(err)
 	}
 	return nil
 }
@@ -227,7 +228,7 @@ func (b *Builder) asmBuild(ctx context.Context, node *dag.Node, bi *BuildInfo) e
 		err := b.Tools.Assemble(args)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed assembling: %v", out)
-			return err
+			return errors.WithStack(err)
 		}
 		asmObjs = append(asmObjs, asmObj)
 	}
@@ -245,7 +246,7 @@ func (b *Builder) asmBuild(ctx context.Context, node *dag.Node, bi *BuildInfo) e
 	err := b.Tools.Pack(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed packing: %v", out)
-		return err
+		return errors.WithStack(err)
 	}
 	return nil
 }
@@ -253,7 +254,7 @@ func (b *Builder) asmBuild(ctx context.Context, node *dag.Node, bi *BuildInfo) e
 func (b *Builder) build(ctx context.Context, node *dag.Node, bi *BuildInfo) error {
 	err := b.writeImportConfig(ctx, node, bi)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 
 	files := []string{}
@@ -266,12 +267,12 @@ func (b *Builder) build(ctx context.Context, node *dag.Node, bi *BuildInfo) erro
 		if f.Generator != nil {
 			of, err := os.Create(path.Join(f.Dir, f.Filename))
 			if err != nil {
-				return err
+				return errors.WithStack(err)
 			}
 			err = f.Generator.Generate(ctx, node, f, of)
 			if err != nil {
 				of.Close()
-				return err
+				return errors.WithStack(err)
 			}
 			of.Close()
 		}
@@ -302,7 +303,7 @@ func (b *Builder) build(ctx context.Context, node *dag.Node, bi *BuildInfo) erro
 	err = b.Tools.Compile(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed compiling: %v", out)
-		return err
+		return errors.WithStack(err)
 	}
 	return nil
 }
@@ -320,7 +321,7 @@ func (b *Builder) writeImportConfig(ctx context.Context, node *dag.Node, bi *Bui
 	}
 	err := ioutil.WriteFile(bi.ImportConfigFile, cfg.Bytes(), 0666)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 	return nil
 }

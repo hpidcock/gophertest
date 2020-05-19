@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"go/build"
 	"os/exec"
+
+	"github.com/pkg/errors"
 )
 
 func ImportAll(buildCtx build.Context, dir string, packages []string) ([]*Package, error) {
@@ -15,7 +17,7 @@ func ImportAll(buildCtx build.Context, dir string, packages []string) ([]*Packag
 
 	pkgs, err := internalImportAll(buildCtx, dir, packages, true)
 	if err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 
 	paths := map[string]struct{}{}
@@ -52,7 +54,7 @@ func ImportAll(buildCtx build.Context, dir string, packages []string) ([]*Packag
 
 	newPkgs, err := internalImportAll(buildCtx, dir, missingPackages, false)
 	if err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 
 	for _, pkg := range newPkgs {
@@ -81,7 +83,7 @@ func internalImportAll(buildCtx build.Context, dir string, packages []string, te
 	cmd.Dir = dir
 	err := cmd.Run()
 	if err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 
 	pkgs := []*Package{}
@@ -90,7 +92,7 @@ func internalImportAll(buildCtx build.Context, dir string, packages []string, te
 		pkg := &Package{}
 		err = decoder.Decode(pkg)
 		if err != nil {
-			return nil, err
+			return nil, errors.WithStack(err)
 		}
 		pkgs = append(pkgs, pkg)
 	}

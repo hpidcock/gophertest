@@ -14,6 +14,7 @@ import (
 	"github.com/hpidcock/gophertest/cache/hasher"
 	"github.com/hpidcock/gophertest/dag"
 	"github.com/hpidcock/gophertest/util"
+	"github.com/pkg/errors"
 )
 
 type Puller struct {
@@ -47,7 +48,7 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 	}
 	lock, err := util.LockDirectory(cacheDir)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 	defer lock.Unlock()
 
@@ -59,7 +60,7 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 		Write:      false,
 	})
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 	if !strings.Contains(readBuildID, buildID) {
 		return nil
@@ -68,40 +69,40 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 	workCache := path.Join(p.WorkDir, "cache", node.ImportPath)
 	err = os.MkdirAll(workCache, 0777)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 
 	cacheObjCopy := path.Join(workCache, "cache.obj")
 	err = util.FileCopy(cacheObj, cacheObjCopy)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 	node.Shlib = cacheObjCopy
 
 	goFiles, err := filepath.Glob(path.Join(cacheDir, "*.go"))
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 	overwriteGoFiles := map[string]struct{}{}
 	for _, v := range goFiles {
 		filename := path.Base(v)
 		err := util.FileCopy(v, path.Join(workCache, v))
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		overwriteGoFiles[filename] = struct{}{}
 	}
 
 	sFiles, err := filepath.Glob(path.Join(cacheDir, "*.s"))
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 	overwriteSFiles := map[string]struct{}{}
 	for _, v := range sFiles {
 		filename := path.Base(v)
 		err := util.FileCopy(v, path.Join(workCache, v))
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		overwriteSFiles[filename] = struct{}{}
 	}

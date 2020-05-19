@@ -18,6 +18,7 @@ import (
 	"github.com/hpidcock/gophertest/dag"
 	"github.com/hpidcock/gophertest/maingen/runner"
 	"github.com/hpidcock/gophertest/packages"
+	"github.com/pkg/errors"
 )
 
 type Generator struct {
@@ -189,7 +190,7 @@ func (g *Generator) GenerateMain(ctx context.Context, d *dag.DAG) error {
 	srcDir := path.Join(g.WorkDir, "main")
 	err := os.Mkdir(srcDir, 0777)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 
 	rawImports := []string{}
@@ -211,7 +212,7 @@ func (g *Generator) GenerateMain(ctx context.Context, d *dag.DAG) error {
 	}
 	node, err := d.Add(pkg, false)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 	node.Mutex.Lock()
 	defer node.Mutex.Unlock()
@@ -237,7 +238,7 @@ func (m *mainGoGenerator) Generate(ctx context.Context, node *dag.Node, goFile d
 		stat, err := os.Stat(imported.Shlib)
 		imported.Mutex.Unlock()
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		importComplexity[importPath] = stat.Size()
 	}
@@ -261,12 +262,12 @@ func (m *mainGoGenerator) Generate(ctx context.Context, node *dag.Node, goFile d
 	err := runner.Template.Execute(writer, m.Context)
 	if err != nil {
 		writer.Close()
-		return err
+		return errors.WithStack(err)
 	}
 
 	err = writer.Close()
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 
 	return nil
