@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	gobuild "go/build"
@@ -13,19 +14,30 @@ import (
 	"runtime"
 
 	"github.com/gophertest/build"
-	"github.com/hpidcock/gophertest/buildctx"
-	"github.com/hpidcock/gophertest/runner"
+	"github.com/pkg/errors"
+
+	"github.com/hpidcock/gophertest/builder"
+	"github.com/hpidcock/gophertest/cache/hasher"
+	"github.com/hpidcock/gophertest/cache/puller"
+	"github.com/hpidcock/gophertest/cache/storer"
+	"github.com/hpidcock/gophertest/dag"
+	"github.com/hpidcock/gophertest/deferredinit"
+	"github.com/hpidcock/gophertest/linker"
+	"github.com/hpidcock/gophertest/maingen"
+	"github.com/hpidcock/gophertest/maingen/runner"
+	"github.com/hpidcock/gophertest/packages"
+	"github.com/hpidcock/gophertest/util"
 )
 
 var (
-	pkgMap       = make(map[string]*buildctx.Package)
-	nodeMap      = make(map[string]*node)
-	testPackages = make(map[string]*testPackage)
-	workDir      = ""
-	srcDir       = ""
-	outFile      = ""
-	pkgDir       = path.Join(runtime.GOROOT(), "pkg")
-	buildCtx     = gobuild.Default
+	pkgMap   = make(map[string]*packages.Package)
+	workDir  = ""
+	cacheDir = ""
+	srcDir   = ""
+	outFile  = ""
+	pkgDir   = path.Join(runtime.GOROOT(), "pkg")
+	buildCtx = gobuild.Default
+	tools    = build.DefaultTools
 )
 
 var (
@@ -38,6 +50,13 @@ var (
 )
 
 func main() {
+	err := Main()
+	if err != nil {
+		fmt.Printf("%+v", err)
+	}
+}
+
+func Main() error {
 	var err error
 
 	buildCtx.GOARCH = env("GOARCH", buildCtx.GOARCH)
@@ -47,12 +66,17 @@ func main() {
 	buildCtx.UseAllFiles = false
 	err = os.Setenv("CGO_ENABLED", "0")
 	if err != nil {
-		log.Fatal(err)
+		return errors.WithStack(err)
 	}
 
 	wd, err := os.Getwd()
 	if err != nil {
-		log.Fatal(err)
+		return errors.WithStack(err)
+	}
+
+	cacheDir, err = util.CacheDir(buildCtx)
+	if err != nil {
+		return errors.Wrap(err, "creating cache dir")
 	}
 
 	flag.Parse()
@@ -68,9 +92,11 @@ func main() {
 		outFile = path.Join(wd, *flagOut)
 	}
 
+	log.Println(outFile)
+
 	workDir, err = ioutil.TempDir("", "gophertest")
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "creating work directory")
 	}
 
 	if *flagKeepWorkDir {
@@ -83,85 +109,162 @@ func main() {
 
 	remaining := flag.NArg()
 	inputTypes := 0
-	packages := []string{}
+	testPackages := []string{}
 	if *flagStdin {
 		inputTypes++
-		packages, err = readPackages(os.Stdin)
+		testPackages, err = readPackages(os.Stdin)
 		if err != nil {
-			log.Fatal(err)
+			return errors.Wrap(err, "reading packages from stdin")
 		}
 	}
 	if *flagFile != "" {
 		inputTypes++
 		f, err := os.Open(*flagFile)
 		if err != nil {
-			log.Fatal(err)
+			return errors.Wrapf(err, "opening package file %q", *flagFile)
 		}
-		packages, err = readPackages(f)
+		testPackages, err = readPackages(f)
 		if err != nil {
-			log.Fatal(err)
+			return errors.Wrapf(err, "reading packages from %q", *flagFile)
 		}
 		err = f.Close()
 		if err != nil {
-			log.Fatal(err)
+			return errors.Wrap(err, "closing file")
 		}
 	}
 	if remaining > 0 {
 		inputTypes++
-		packages = os.Args[len(os.Args)-remaining:]
+		testPackages = os.Args[len(os.Args)-remaining:]
 	}
 	if inputTypes != 1 {
 		fmt.Fprintf(os.Stderr, "only one of -f or -stdin or command line packages can be passed")
 		flag.PrintDefaults()
 		os.Exit(-1)
 	}
-	if len(packages) == 0 {
+	if len(testPackages) == 0 {
 		fmt.Fprintf(os.Stderr, "no packages to build")
 		os.Exit(-1)
 	}
 
-	fullPackages := append([]string(nil), packages...)
+	fullPackages := append([]string(nil), testPackages...)
 	fullPackages = append(fullPackages, runner.Deps...)
-	buildPkgs, err := buildctx.ImportAll(srcDir, "gc", fullPackages)
-	for _, pkg := range buildPkgs {
-		pkgMap[pkg.ImportPath] = pkg
+	buildPkgs, err := packages.ImportAll(buildCtx, srcDir, fullPackages)
+
+	testPackagesMap := map[string]struct{}{}
+	for _, importPath := range testPackages {
+		testPackagesMap[importPath] = struct{}{}
 	}
 
-	for _, pkg := range packages {
-		err := add(pkg, srcDir, true)
+	d := dag.NewDAG()
+	for _, pkg := range buildPkgs {
+		_, includeTests := testPackagesMap[pkg.ImportPath]
+		_, err := d.Add(pkg, includeTests)
 		if err != nil {
-			log.Fatal(err)
+			return errors.Wrapf(err, "adding %q to dag", pkg.ImportPath)
 		}
 	}
 
-	err = patchTests()
+	err = d.CheckComplete()
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "dag incomplete")
 	}
 
-	err = generateMain()
+	err = d.VisitAllFromRight(context.Background(), &hasher.Hasher{
+		BuildCtx: buildCtx,
+		Tools:    tools,
+	})
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "hashing source")
 	}
 
-	linkDeps()
-
-	err = buildAll()
+	err = d.VisitAllFromRight(context.Background(), &puller.Puller{
+		BuildCtx: buildCtx,
+		Tools:    tools,
+		WorkDir:  workDir,
+		CacheDir: cacheDir,
+	})
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "pulling from cache")
 	}
 
-	err = link()
+	di := &deferredinit.DeferredIniter{
+		BuildCtx:  buildCtx,
+		Tools:     tools,
+		WorkDir:   workDir,
+		SourceDir: srcDir,
+	}
+	err = d.VisitAllFromRight(context.Background(), dag.VisitorFunc(di.CollectPackages))
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, "finding tests")
+	}
+
+	err = di.LoadPackages()
+	if err != nil {
+		return errors.Wrap(err, "loading tests")
+	}
+
+	err = d.VisitAllFromRight(context.Background(), dag.VisitorFunc(di.Rewrite))
+	if err != nil {
+		return errors.Wrap(err, "rewriting tests")
+	}
+
+	err = d.CheckComplete()
+	if err != nil {
+		return errors.Wrap(err, "dag incomplete")
+	}
+
+	gen := &maingen.Generator{
+		BuildCtx: buildCtx,
+		Tools:    tools,
+		WorkDir:  workDir,
+	}
+
+	err = d.VisitAllFromRight(context.Background(), dag.VisitorFunc(gen.FindTests))
+	if err != nil {
+		return errors.Wrap(err, "finding tests")
+	}
+
+	err = gen.GenerateMain(context.Background(), d)
+	if err != nil {
+		return errors.Wrap(err, "generating main")
+	}
+
+	err = d.VisitAllFromRight(context.Background(), &builder.Builder{
+		BuildCtx: buildCtx,
+		Tools:    tools,
+		WorkDir:  workDir,
+	})
+	if err != nil {
+		return errors.Wrap(err, "compiling")
+	}
+
+	err = d.VisitAllFromRight(context.Background(), &linker.Linker{
+		BuildCtx: buildCtx,
+		Tools:    tools,
+		WorkDir:  workDir,
+		OutFile:  outFile,
+	})
+	if err != nil {
+		return errors.Wrap(err, "linking")
+	}
+
+	err = d.VisitAllFromRight(context.Background(), &storer.Storer{
+		BuildCtx: buildCtx,
+		Tools:    tools,
+		CacheDir: cacheDir,
+	})
+	if err != nil {
+		return errors.Wrap(err, "updating cache")
 	}
 
 	if !*flagKeepWorkDir {
 		err = os.RemoveAll(workDir)
 		if err != nil {
-			log.Fatal(err)
+			return errors.Wrap(err, "cleaning work dir")
 		}
 	}
+
+	return nil
 }
 
 func readPackages(r io.Reader) ([]string, error) {
@@ -173,7 +276,7 @@ func readPackages(r io.Reader) ([]string, error) {
 		if err == io.EOF {
 			break
 		} else if err != nil {
-			return nil, err
+			return nil, errors.WithStack(err)
 		}
 		line = append(line, buf...)
 		if isPrefix {

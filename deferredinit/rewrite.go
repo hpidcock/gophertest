@@ -1,8 +1,10 @@
 package deferredinit
 
 import (
+	"context"
 	"fmt"
 	"go/ast"
+	gobuild "go/build"
 	"go/format"
 	"go/token"
 	"go/types"
@@ -19,6 +21,9 @@ import (
 	"golang.org/x/tools/go/packages"
 
 	"github.com/go-toolsmith/astcopy"
+	"github.com/gophertest/build"
+	"github.com/hpidcock/gophertest/dag"
+	"github.com/pkg/errors"
 )
 
 type initAssign struct {
@@ -27,14 +32,51 @@ type initAssign struct {
 	srcFile   *ast.File
 }
 
-type RewritePkg struct {
-	Path           string
-	TestImports    []string
-	AddedTestFiles []string
-	Complexity     int
+type DeferredIniter struct {
+	BuildCtx gobuild.Context
+	Tools    build.Tools
+
+	WorkDir   string
+	SourceDir string
+
+	mutex        sync.Mutex
+	testPackages map[string]*packages.Package
 }
 
-func LoadPackages(dir string, importPaths []string) (map[string][]*packages.Package, error) {
+func (d *DeferredIniter) CollectPackages(ctx context.Context, node *dag.Node) error {
+	if !node.Tests {
+		return nil
+	}
+	if node.Shlib != "" {
+		return nil
+	}
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+	if d.testPackages == nil {
+		d.testPackages = make(map[string]*packages.Package)
+	}
+	if _, ok := d.testPackages[node.ImportPath]; ok {
+		return fmt.Errorf("package %q already collected", node.ImportPath)
+	}
+	d.testPackages[node.ImportPath] = nil
+	return nil
+}
+
+func (d *DeferredIniter) LoadPackages() error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	dedupe := map[string]struct{}{}
+	importPaths := []string(nil)
+	for k := range d.testPackages {
+		importPath := strings.TrimSuffix(k, "_test")
+		if _, ok := dedupe[importPath]; ok {
+			continue
+		}
+		dedupe[importPath] = struct{}{}
+		importPaths = append(importPaths, importPath)
+	}
+
 	config := &packages.Config{
 		Mode: packages.NeedTypesInfo |
 			packages.NeedTypes |
@@ -43,62 +85,174 @@ func LoadPackages(dir string, importPaths []string) (map[string][]*packages.Pack
 			packages.NeedSyntax |
 			packages.NeedName,
 		Tests: true,
-		Dir:   dir,
+		Dir:   d.SourceDir,
 	}
 
 	pkgs, err := packages.Load(config, importPaths...)
 	if err != nil {
-		return nil, err
+		return errors.WithStack(err)
 	}
-
-	result := map[string][]*packages.Package{}
 	for _, pkg := range pkgs {
 		if !strings.HasSuffix(pkg.ID, ".test]") {
 			continue
 		}
-		importPath := strings.TrimSuffix(pkg.PkgPath, "_test")
-		pkgResult := result[importPath]
-		pkgResult = append(pkgResult, pkg)
-		result[importPath] = pkgResult
+		if oldPkg, ok := d.testPackages[pkg.PkgPath]; !ok {
+			continue
+		} else if oldPkg != nil {
+			return fmt.Errorf("package %q already loaded", pkg.PkgPath)
+		}
+		d.testPackages[pkg.PkgPath] = pkg
 	}
 
-	return result, nil
+	return nil
 }
 
-func RewriteTestPackages(dir string, pkgs []*packages.Package, outDir string) ([]RewritePkg, error) {
-	transformed := []RewritePkg{}
-	for _, pkg := range pkgs {
-		testPackage := false
-		for _, f := range pkg.Syntax {
-			// Skip non-test packages
-			file := pkg.Fset.File(f.Package)
-			if strings.HasSuffix(file.Name(), "_test.go") {
-				testPackage = true
-			}
+func (d *DeferredIniter) Rewrite(ctx context.Context, node *dag.Node) error {
+	if !node.Tests {
+		return nil
+	}
+	if node.Shlib != "" {
+		return nil
+	}
+
+	pkg, ok := d.testPackages[node.ImportPath]
+	if !ok || pkg == nil {
+		return fmt.Errorf("package %q missing", node.ImportPath)
+	}
+
+	missingTests := true
+	for _, f := range pkg.Syntax {
+		// Skip non-test packages
+		file := pkg.Fset.File(f.Package)
+		if strings.HasSuffix(file.Name(), "_test.go") {
+			missingTests = false
 		}
-		if !testPackage {
+	}
+	if missingTests {
+		return fmt.Errorf("package %q missing test files", node.ImportPath)
+	}
+
+	outDir := path.Join(d.WorkDir, "rewrite", node.ImportPath)
+	err := os.MkdirAll(outDir, 0777)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	newFiles, testImports, err := d.transformPkg(ctx, pkg, outDir)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	// Patch file paths for changed files. Add missing ones.
+	filesToAdd := map[string]struct{}{}
+	for _, v := range newFiles {
+		filesToAdd[v] = struct{}{}
+	}
+	for k, goFile := range node.GoFiles {
+		if _, ok := filesToAdd[goFile.Filename]; !ok {
 			continue
 		}
-
-		newFiles, testImports, complexity, err := transformPkg(pkg, pkg.Fset, outDir)
-		if err != nil {
-			return nil, err
-		}
-
-		transformed = append(transformed, RewritePkg{
-			Path:           pkg.PkgPath,
-			TestImports:    testImports,
-			AddedTestFiles: newFiles,
-			Complexity:     complexity,
-		})
+		delete(filesToAdd, goFile.Filename)
+		goFile.Dir = outDir
+		node.GoFiles[k] = goFile
 	}
-	return transformed, nil
+	for filename := range filesToAdd {
+		goFile := dag.GoFile{
+			Dir:      outDir,
+			Filename: filename,
+			Test:     strings.HasSuffix(filename, "_test.go"),
+		}
+		node.GoFiles = append(node.GoFiles, goFile)
+	}
+
+	importsToAdd := map[string]struct{}{}
+	for _, v := range testImports {
+		if v == node.ImportPath {
+			// Never try to import ourselves.
+			continue
+		}
+		importsToAdd[v] = struct{}{}
+	}
+	for _, imp := range node.Imports {
+		delete(importsToAdd, imp.ImportPath)
+	}
+	for importPath := range importsToAdd {
+		imp, err := d.findDependency(ctx, node, importPath)
+		if err != nil {
+			return errors.WithStack(err)
+		} else if imp == nil {
+			return fmt.Errorf("could not find import %q in import tree of %q", importPath, node.ImportPath)
+		}
+		imp.Deps = append(imp.Deps, node)
+		node.Imports = append(node.Imports, dag.Import{
+			Node: imp,
+			Test: true,
+		})
+		imp.Mutex.Unlock()
+	}
+
+	return nil
 }
 
-func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]string, []string, int, error) {
-	assignments := make([]initAssign, 0, len(pkg.TypesInfo.InitOrder))
+func (d *DeferredIniter) findDependency(ctx context.Context, node *dag.Node, importPath string) (*dag.Node, error) {
+	// TODO: handle import map
+	for _, imp := range node.Imports {
+		imp.Mutex.Lock()
+		if imp.ImportPath == importPath {
+			// Leave locked.
+			return imp.Node, nil
+		}
+		imp.Mutex.Unlock()
+	}
 
-	complexity := 0
+	for _, imp := range node.Imports {
+		imp.Mutex.Lock()
+		found, err := d.findDependency(ctx, imp.Node, importPath)
+		imp.Mutex.Unlock()
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		if found != nil {
+			return found, nil
+		}
+	}
+
+	return nil, nil
+}
+
+type transformState struct {
+	Pkg    *packages.Package
+	OutDir string
+
+	uniqueFuncSuffix   int
+	uniqueFuncMutex    sync.Mutex
+	uniqueImportSuffix int
+	uniqueImportMutex  sync.Mutex
+}
+
+func (s *transformState) NextInitName() string {
+	s.uniqueFuncMutex.Lock()
+	suffix := s.uniqueFuncSuffix
+	s.uniqueFuncSuffix++
+	s.uniqueFuncMutex.Unlock()
+	return fmt.Sprintf("gopherTestInit%d", suffix)
+}
+
+func (s *transformState) NextImportName() string {
+	s.uniqueImportMutex.Lock()
+	suffix := s.uniqueImportSuffix
+	s.uniqueImportSuffix++
+	s.uniqueImportMutex.Unlock()
+	return fmt.Sprintf("gopherTestImport%d", suffix)
+}
+
+func (d *DeferredIniter) transformPkg(ctx context.Context, pkg *packages.Package, outDir string) ([]string, []string, error) {
+	state := &transformState{
+		Pkg:    pkg,
+		OutDir: outDir,
+	}
+
+	assignments := make([]initAssign, 0, len(pkg.TypesInfo.InitOrder))
 
 	posToOrder := map[token.Pos]int{}
 	for i, v := range pkg.TypesInfo.InitOrder {
@@ -113,26 +267,16 @@ func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]
 			if c.Node() == nil {
 				return true
 			}
-			complexity++
 			switch t := c.Node().(type) {
 			case *ast.Ident:
 				if order, ok := posToOrder[t.Pos()]; ok {
 					identToOrder[t] = order
 				}
 			case *ast.FuncDecl:
-				if t.Body != nil {
-					complexity += len(t.Body.List)
-				}
 				return false
 			case *ast.StructType:
-				if t.Fields != nil {
-					complexity += len(t.Fields.List)
-				}
 				return false
 			case *ast.InterfaceType:
-				if t.Methods != nil {
-					complexity += len(t.Methods.List)
-				}
 				return false
 			}
 			return true
@@ -144,18 +288,6 @@ func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]
 	for _, f := range pkg.Syntax {
 		file := pkg.Fset.File(f.Package)
 		if !strings.HasSuffix(file.Name(), "_test.go") {
-			of, err := os.OpenFile(path.Join(outDir, path.Base(file.Name())), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
-			if err != nil {
-				return nil, nil, 0, err
-			}
-			err = format.Node(of, fset, f)
-			if err != nil {
-				return nil, nil, 0, err
-			}
-			err = of.Close()
-			if err != nil {
-				return nil, nil, 0, err
-			}
 			continue
 		}
 
@@ -184,7 +316,7 @@ func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]
 					if n.Type.Results != nil && len(n.Type.Results.List) > 0 {
 						break
 					}
-					newName := nextInitName()
+					newName := state.NextInitName()
 					c.Replace(&ast.FuncDecl{
 						Name: &ast.Ident{
 							Name: newName,
@@ -233,7 +365,7 @@ func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]
 						expr := n.Type
 						if expr == nil {
 							tv := ti.TypeOf(value)
-							expr = resolveType(tv, pkg, fset, f, fset.Position(value.Pos()))
+							expr = resolveType(state, tv, f, pkg.Fset.Position(value.Pos()))
 						}
 						if expr != nil {
 							c.Replace(&ast.ValueSpec{
@@ -244,7 +376,7 @@ func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]
 								Values:  nil,
 							})
 
-							funcName := nextInitName()
+							funcName := state.NextInitName()
 							fn := &ast.FuncDecl{
 								Name: &ast.Ident{
 									Name: funcName,
@@ -282,30 +414,33 @@ func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]
 
 		f.Decls = append(f.Decls, addedDecls...)
 
-		imports := astutil.Imports(fset, f)
+		imports := astutil.Imports(pkg.Fset, f)
 		for _, para := range imports {
 			for _, imp := range para {
 				importPath, err := strconv.Unquote(imp.Path.Value)
 				if err != nil {
-					return nil, nil, 0, err
+					return nil, nil, errors.WithStack(err)
 				}
 				testImports[importPath] = struct{}{}
 			}
 		}
 
-		of, err := os.OpenFile(path.Join(outDir, path.Base(file.Name())), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+		newFile := path.Base(file.Name())
+		of, err := os.OpenFile(path.Join(outDir, newFile), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0666)
 		if err != nil {
-			return nil, nil, 0, err
+			return nil, nil, errors.WithStack(err)
 		}
-		err = format.Node(of, fset, f)
+		err = format.Node(of, pkg.Fset, f)
 		if err != nil {
-			log.Printf("failed to format %s for %s", path.Base(file.Name()), pkg.PkgPath)
-			return nil, nil, 0, err
+			log.Printf("failed to format %s for %s", newFile, pkg.PkgPath)
+			return nil, nil, errors.WithStack(err)
 		}
 		err = of.Close()
 		if err != nil {
-			return nil, nil, 0, err
+			return nil, nil, errors.WithStack(err)
 		}
+
+		newFiles = append(newFiles, newFile)
 	}
 
 	if len(assignments) > 0 {
@@ -336,28 +471,28 @@ func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]
 		g.Decls = append(g.Decls, fn)
 
 		newFile := fmt.Sprintf("gophertest_generated_%s_test.go", pkg.Name)
-		imports := astutil.Imports(fset, g)
+		imports := astutil.Imports(pkg.Fset, g)
 		for _, para := range imports {
 			for _, imp := range para {
 				importPath, err := strconv.Unquote(imp.Path.Value)
 				if err != nil {
-					return nil, nil, 0, err
+					return nil, nil, err
 				}
 				testImports[importPath] = struct{}{}
 			}
 		}
 
-		of, err := os.OpenFile(path.Join(outDir, newFile), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+		of, err := os.OpenFile(path.Join(outDir, newFile), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0666)
 		if err != nil {
-			return nil, nil, 0, err
+			return nil, nil, errors.WithStack(err)
 		}
-		err = format.Node(of, fset, g)
+		err = format.Node(of, pkg.Fset, g)
 		if err != nil {
-			return nil, nil, 0, err
+			return nil, nil, errors.WithStack(err)
 		}
 		err = of.Close()
 		if err != nil {
-			return nil, nil, 0, err
+			return nil, nil, errors.WithStack(err)
 		}
 
 		newFiles = append(newFiles, newFile)
@@ -368,10 +503,10 @@ func transformPkg(pkg *packages.Package, fset *token.FileSet, outDir string) ([]
 		uniqueTestImports = append(uniqueTestImports, k)
 	}
 
-	return newFiles, uniqueTestImports, complexity, nil
+	return newFiles, uniqueTestImports, nil
 }
 
-func resolveType(decl types.Type, pkg *packages.Package, fset *token.FileSet, f *ast.File, pos token.Position) ast.Expr {
+func resolveType(state *transformState, decl types.Type, f *ast.File, pos token.Position) ast.Expr {
 	switch t := decl.(type) {
 	case *types.Basic:
 		return &ast.Ident{
@@ -380,7 +515,7 @@ func resolveType(decl types.Type, pkg *packages.Package, fset *token.FileSet, f 
 	case *types.Named:
 		objPkg := t.Obj().Pkg()
 		if objPkg != nil {
-			if objPkg.Path() == pkg.PkgPath {
+			if objPkg.Path() == state.Pkg.PkgPath {
 				return &ast.Ident{
 					Name: t.Obj().Name(),
 					Obj: &ast.Object{
@@ -396,7 +531,7 @@ func resolveType(decl types.Type, pkg *packages.Package, fset *token.FileSet, f 
 			}
 		}
 
-		name := findOrAddImport(pkg, fset, f, objPkg.Path())
+		name := findOrAddImport(state, f, objPkg.Path())
 		return &ast.SelectorExpr{
 			X: &ast.Ident{
 				Name: name,
@@ -407,15 +542,15 @@ func resolveType(decl types.Type, pkg *packages.Package, fset *token.FileSet, f 
 		}
 	case *types.Pointer:
 		return &ast.StarExpr{
-			X: resolveType(t.Elem(), pkg, fset, f, pos),
+			X: resolveType(state, t.Elem(), f, pos),
 		}
 	case *types.Slice:
 		return &ast.ArrayType{
-			Elt: resolveType(t.Elem(), pkg, fset, f, pos),
+			Elt: resolveType(state, t.Elem(), f, pos),
 		}
 	case *types.Array:
 		return &ast.ArrayType{
-			Elt: resolveType(t.Elem(), pkg, fset, f, pos),
+			Elt: resolveType(state, t.Elem(), f, pos),
 			Len: &ast.BasicLit{
 				Kind:  token.INT,
 				Value: strconv.FormatInt(t.Len(), 10),
@@ -423,12 +558,12 @@ func resolveType(decl types.Type, pkg *packages.Package, fset *token.FileSet, f 
 		}
 	case *types.Map:
 		return &ast.MapType{
-			Key:   resolveType(t.Key(), pkg, fset, f, pos),
-			Value: resolveType(t.Elem(), pkg, fset, f, pos),
+			Key:   resolveType(state, t.Key(), f, pos),
+			Value: resolveType(state, t.Elem(), f, pos),
 		}
 	case *types.Chan:
 		v := &ast.ChanType{
-			Value: resolveType(t.Elem(), pkg, fset, f, pos),
+			Value: resolveType(state, t.Elem(), f, pos),
 		}
 		switch t.Dir() {
 		case types.SendRecv:
@@ -449,7 +584,7 @@ func resolveType(decl types.Type, pkg *packages.Package, fset *token.FileSet, f 
 				Names: []*ast.Ident{{
 					Name: fn.Name(),
 				}},
-				Type: resolveType(fn.Type(), pkg, fset, f, pos),
+				Type: resolveType(state, fn.Type(), f, pos),
 			})
 		}
 		return v
@@ -467,7 +602,7 @@ func resolveType(decl types.Type, pkg *packages.Package, fset *token.FileSet, f 
 			}
 			v.Fields.List = append(v.Fields.List, &ast.Field{
 				Names: names,
-				Type:  resolveType(field.Type(), pkg, fset, f, pos),
+				Type:  resolveType(state, field.Type(), f, pos),
 			})
 		}
 		return v
@@ -498,7 +633,7 @@ func resolveType(decl types.Type, pkg *packages.Package, fset *token.FileSet, f 
 						Name: name,
 					}},
 					Type: &ast.Ellipsis{
-						Elt: resolveType(elem, pkg, fset, f, pos),
+						Elt: resolveType(state, elem, f, pos),
 					},
 				})
 			} else {
@@ -510,7 +645,7 @@ func resolveType(decl types.Type, pkg *packages.Package, fset *token.FileSet, f 
 					Names: []*ast.Ident{{
 						Name: name,
 					}},
-					Type: resolveType(e.Type(), pkg, fset, f, pos),
+					Type: resolveType(state, e.Type(), f, pos),
 				})
 			}
 		}
@@ -521,7 +656,7 @@ func resolveType(decl types.Type, pkg *packages.Package, fset *token.FileSet, f 
 				Names: []*ast.Ident{{
 					Name: e.Name(),
 				}},
-				Type: resolveType(e.Type(), pkg, fset, f, pos),
+				Type: resolveType(state, e.Type(), f, pos),
 			})
 		}
 		return v
@@ -531,11 +666,8 @@ func resolveType(decl types.Type, pkg *packages.Package, fset *token.FileSet, f 
 	return nil
 }
 
-var uniqueImportSuffix = 0
-var uniqueImportMutex sync.Mutex
-
-func findOrAddImport(pkg *packages.Package, fset *token.FileSet, f *ast.File, path string) string {
-	imports := astutil.Imports(fset, f)
+func findOrAddImport(state *transformState, f *ast.File, path string) string {
+	imports := astutil.Imports(state.Pkg.Fset, f)
 	for _, para := range imports {
 		for _, imp := range para {
 			importPath, err := strconv.Unquote(imp.Path.Value)
@@ -546,37 +678,19 @@ func findOrAddImport(pkg *packages.Package, fset *token.FileSet, f *ast.File, pa
 				if imp.Name != nil {
 					return imp.Name.Name
 				}
-				if importPkg, ok := pkg.Imports[importPath]; ok {
+				if importPkg, ok := state.Pkg.Imports[importPath]; ok {
 					return importPkg.Name
 				}
 			}
 		}
 	}
-
-	uniqueImportMutex.Lock()
-	suffix := uniqueImportSuffix
-	uniqueImportSuffix++
-	uniqueImportMutex.Unlock()
-
-	name := fmt.Sprintf("gopherTestImport%d", suffix)
-	astutil.AddNamedImport(fset, f, name, path)
+	name := state.NextImportName()
+	astutil.AddNamedImport(state.Pkg.Fset, f, name, path)
 	return name
 }
 
-var uniqueFuncSuffix = 0
-var uniqueFuncMutex sync.Mutex
-
-func nextInitName() string {
-	uniqueFuncMutex.Lock()
-	suffix := uniqueFuncSuffix
-	uniqueFuncSuffix++
-	uniqueFuncMutex.Unlock()
-
-	return fmt.Sprintf("gopherTestInit%d", suffix)
-}
-
-func pathOfImport(pkg *packages.Package, fset *token.FileSet, f *ast.File, name string) string {
-	imports := astutil.Imports(fset, f)
+func pathOfImport(state *transformState, f *ast.File, name string) string {
+	imports := astutil.Imports(state.Pkg.Fset, f)
 	for _, para := range imports {
 		for _, imp := range para {
 			path, err := strconv.Unquote(imp.Path.Value)
@@ -587,7 +701,7 @@ func pathOfImport(pkg *packages.Package, fset *token.FileSet, f *ast.File, name 
 				if imp.Name.Name != name {
 					continue
 				}
-			} else if importPkg, ok := pkg.Imports[path]; !ok || importPkg.Name != name {
+			} else if importPkg, ok := state.Pkg.Imports[path]; !ok || importPkg.Name != name {
 				continue
 			}
 			return path
@@ -596,7 +710,7 @@ func pathOfImport(pkg *packages.Package, fset *token.FileSet, f *ast.File, name 
 	return ""
 }
 
-func rewriteStatement(pkg *packages.Package, fset *token.FileSet, srcFile *ast.File, destFile *ast.File, stmt *ast.AssignStmt) *ast.AssignStmt {
+func rewriteStatement(state *transformState, srcFile *ast.File, destFile *ast.File, stmt *ast.AssignStmt) *ast.AssignStmt {
 	copy := astcopy.AssignStmt(stmt)
 	astutil.Apply(copy, func(c *astutil.Cursor) bool {
 		node := c.Node()
@@ -611,10 +725,10 @@ func rewriteStatement(pkg *packages.Package, fset *token.FileSet, srcFile *ast.F
 				if !ok {
 					return true
 				}
-				path := pathOfImport(pkg, fset, srcFile, ident.Name)
+				path := pathOfImport(state, srcFile, ident.Name)
 				if path != "" {
 					n.X = &ast.Ident{
-						Name: findOrAddImport(pkg, fset, destFile, path),
+						Name: findOrAddImport(state, destFile, path),
 					}
 					return false
 				}
