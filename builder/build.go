@@ -47,7 +47,7 @@ type BuildInfo struct {
 func (b *Builder) Visit(ctx context.Context, node *dag.Node) error {
 	var err error
 
-	if node.Shlib != "" {
+	if node.Shlib != "" || node.Intrinsic {
 		node.Meta = append(node.Meta, &BuildMeta{
 			Rebuilt: false,
 		})
@@ -63,7 +63,7 @@ func (b *Builder) Visit(ctx context.Context, node *dag.Node) error {
 		}
 	}
 	if bi.BuildID == "" {
-		return fmt.Errorf("build id missing")
+		return fmt.Errorf("build id missing for %q", node.ImportPath)
 	}
 
 	bi.WorkDir = path.Join(append([]string{b.WorkDir, "build"}, strings.Split(node.ImportPath, "/")...)...)
@@ -316,7 +316,9 @@ func (b *Builder) writeImportConfig(ctx context.Context, node *dag.Node, bi *Bui
 	}
 	for _, dep := range node.Imports {
 		dep.Mutex.Lock()
-		fmt.Fprintf(cfg, "packagefile %s=%s\n", dep.ImportPath, dep.Shlib)
+		if !dep.Intrinsic {
+			fmt.Fprintf(cfg, "packagefile %s=%s\n", dep.ImportPath, dep.Shlib)
+		}
 		dep.Mutex.Unlock()
 	}
 	err := ioutil.WriteFile(bi.ImportConfigFile, cfg.Bytes(), 0666)

@@ -83,6 +83,10 @@ func (d *DAG) Add(pkg *packages.Package, includeTests bool) (*Node, error) {
 		Standard:  pkg.Standard,
 		ImportMap: pkg.ImportMap,
 	}
+	switch importPath {
+	case "C", "unsafe":
+		bits.Intrinsic = true
+	}
 	node.NodeBits = bits
 
 	for _, f := range pkg.GoFiles {
@@ -406,7 +410,6 @@ func (d *DAG) visitAll(ctx context.Context,
 			nextPass = append(nextPass, n)
 			continue
 		}
-		alreadyVisited[n] = struct{}{}
 		thisPass = append(thisPass, n)
 		eg.Go(func() error {
 			defer node.Mutex.Unlock()
@@ -421,6 +424,7 @@ func (d *DAG) visitAll(ctx context.Context,
 
 	d.mutex.Lock()
 	for _, node := range thisPass {
+		alreadyVisited[node] = struct{}{}
 		node.Mutex.Lock()
 		switch direction {
 		case Left:

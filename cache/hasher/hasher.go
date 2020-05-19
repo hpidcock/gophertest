@@ -83,6 +83,9 @@ func (c *Hasher) Visit(ctx context.Context, node *dag.Node) error {
 	}
 
 	for _, goFile := range node.GoFiles {
+		if goFile.Generator != nil {
+			continue
+		}
 		s := sha256.New()
 		_, err := fmt.Fprintf(s, "%s:%s:%t\n", goFile.Dir, goFile.Filename, goFile.Test)
 		if err != nil {

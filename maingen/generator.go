@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/hpidcock/gophertest/cache/hasher"
+
 	"github.com/gophertest/build"
 	"github.com/hpidcock/gophertest/dag"
 	"github.com/hpidcock/gophertest/maingen/runner"
@@ -35,8 +37,12 @@ func (g *Generator) FindTests(ctx context.Context, node *dag.Node) error {
 	if !node.Tests {
 		return nil
 	}
+
 	g.testPackagesMutex.Lock()
 	defer g.testPackagesMutex.Unlock()
+	if g.testPackages == nil {
+		g.testPackages = make(map[string]*testPackage)
+	}
 
 	testPath := strings.TrimSuffix(node.ImportPath, "_test")
 
@@ -223,6 +229,16 @@ func (g *Generator) GenerateMain(ctx context.Context, d *dag.DAG) error {
 		Generator: &mainGoGenerator{runnerCtx},
 	})
 
+	// TODO: Fix dependency
+	hasher := &hasher.Hasher{
+		BuildCtx: g.BuildCtx,
+		Tools:    g.Tools,
+	}
+	err = hasher.Visit(ctx, node)
+	if err != nil {
+		return errors.Wrap(err, "hashing main")
+	}
+
 	return nil
 }
 
@@ -234,6 +250,10 @@ func (m *mainGoGenerator) Generate(ctx context.Context, node *dag.Node, goFile d
 	importComplexity := map[string]int64{}
 	for _, imported := range node.Imports {
 		imported.Mutex.Lock()
+		if imported.Intrinsic {
+			imported.Mutex.Unlock()
+			continue
+		}
 		importPath := imported.ImportPath
 		stat, err := os.Stat(imported.Shlib)
 		imported.Mutex.Unlock()

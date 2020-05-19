@@ -26,7 +26,7 @@ func CacheDir(buildCtx build.Context) (string, error) {
 	if err != nil {
 		return "", errors.WithStack(err)
 	}
-	dir := path.Join(cacheDir, buildCtx.GOOS+"_"+buildCtx.GOARCH)
+	dir := path.Join(cacheDir, "gophertest", buildCtx.GOOS+"_"+buildCtx.GOARCH)
 	err = os.MkdirAll(dir, 0777)
 	if err != nil {
 		return "", errors.WithStack(err)

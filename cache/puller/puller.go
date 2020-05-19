@@ -86,7 +86,7 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 	overwriteGoFiles := map[string]struct{}{}
 	for _, v := range goFiles {
 		filename := path.Base(v)
-		err := util.FileCopy(v, path.Join(workCache, v))
+		err := util.FileCopy(v, path.Join(workCache, filename))
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -100,7 +100,7 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 	overwriteSFiles := map[string]struct{}{}
 	for _, v := range sFiles {
 		filename := path.Base(v)
-		err := util.FileCopy(v, path.Join(workCache, v))
+		err := util.FileCopy(v, path.Join(workCache, filename))
 		if err != nil {
 			return errors.WithStack(err)
 		}

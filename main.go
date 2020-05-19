@@ -92,6 +92,8 @@ func Main() error {
 		outFile = path.Join(wd, *flagOut)
 	}
 
+	log.Println(outFile)
+
 	workDir, err = ioutil.TempDir("", "gophertest")
 	if err != nil {
 		return errors.Wrap(err, "creating work directory")

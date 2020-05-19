@@ -21,6 +21,7 @@ type NodeBits struct {
 	RootDir   string
 	Goroot    bool
 	Standard  bool
+	Intrinsic bool
 	GoFiles   []GoFile
 	SFiles    []SFile
 	Imports   []Import

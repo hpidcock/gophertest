@@ -29,7 +29,11 @@ type Linker struct {
 func (l *Linker) Visit(ctx context.Context, node *dag.Node) error {
 	if node.ImportPath != "main" {
 		if len(node.Deps) == 0 {
-			return fmt.Errorf("node without dependents %q", node.ImportPath)
+			fmt.Printf("warn: node without dependents %q\n", node.ImportPath)
+			return nil
+		}
+		if node.Intrinsic {
+			return nil
 		}
 		if node.Shlib == "" {
 			return fmt.Errorf("missing shlib for %q", node.ImportPath)
@@ -41,17 +45,25 @@ func (l *Linker) Visit(ctx context.Context, node *dag.Node) error {
 		}
 		l.packageMapMutex.Lock()
 		defer l.packageMapMutex.Unlock()
+		if l.packageMap == nil {
+			l.packageMap = make(map[string]string)
+		}
 		if _, ok := l.packageMap[node.ImportPath]; ok {
 			return fmt.Errorf("package map already contains import %q", node.ImportPath)
 		}
 		l.packageMap[node.ImportPath] = node.Shlib
 		return nil
 	}
+
 	if len(node.Deps) > 0 {
 		return fmt.Errorf("main has dependants")
 	}
+
 	l.packageMapMutex.Lock()
 	defer l.packageMapMutex.Unlock()
+	if l.packageMap == nil {
+		l.packageMap = make(map[string]string)
+	}
 
 	exeDir := path.Join(l.WorkDir, "exe")
 	err := os.Mkdir(exeDir, 0777)
@@ -76,7 +88,7 @@ func (l *Linker) Visit(ctx context.Context, node *dag.Node) error {
 		OutputFile:       l.OutFile,
 		Files:            []string{node.Shlib},
 	}
-	l.Tools.Link(args)
+	err = l.Tools.Link(args)
 	if err != nil {
 		fmt.Fprint(os.Stderr, out)
 		return errors.WithStack(err)

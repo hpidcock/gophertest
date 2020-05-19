@@ -47,6 +47,9 @@ func (d *DeferredIniter) CollectPackages(ctx context.Context, node *dag.Node) er
 	if !node.Tests {
 		return nil
 	}
+	if node.Shlib != "" {
+		return nil
+	}
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 	if d.testPackages == nil {
@@ -63,12 +66,15 @@ func (d *DeferredIniter) LoadPackages() error {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
+	dedupe := map[string]struct{}{}
 	importPaths := []string(nil)
 	for k := range d.testPackages {
-		if strings.HasSuffix(k, "_test") {
+		importPath := strings.TrimSuffix(k, "_test")
+		if _, ok := dedupe[importPath]; ok {
 			continue
 		}
-		importPaths = append(importPaths, k)
+		dedupe[importPath] = struct{}{}
+		importPaths = append(importPaths, importPath)
 	}
 
 	config := &packages.Config{
@@ -103,6 +109,9 @@ func (d *DeferredIniter) LoadPackages() error {
 
 func (d *DeferredIniter) Rewrite(ctx context.Context, node *dag.Node) error {
 	if !node.Tests {
+		return nil
+	}
+	if node.Shlib != "" {
 		return nil
 	}
 
@@ -188,10 +197,12 @@ func (d *DeferredIniter) Rewrite(ctx context.Context, node *dag.Node) error {
 func (d *DeferredIniter) findDependency(ctx context.Context, node *dag.Node, importPath string) (*dag.Node, error) {
 	// TODO: handle import map
 	for _, imp := range node.Imports {
+		imp.Mutex.Lock()
 		if imp.ImportPath == importPath {
-			imp.Mutex.Lock()
+			// Leave locked.
 			return imp.Node, nil
 		}
+		imp.Mutex.Unlock()
 	}
 
 	for _, imp := range node.Imports {
@@ -201,7 +212,9 @@ func (d *DeferredIniter) findDependency(ctx context.Context, node *dag.Node, imp
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
-		return found, nil
+		if found != nil {
+			return found, nil
+		}
 	}
 
 	return nil, nil
