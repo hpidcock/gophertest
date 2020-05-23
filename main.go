@@ -92,8 +92,6 @@ func Main() error {
 		outFile = path.Join(wd, *flagOut)
 	}
 
-	log.Println(outFile)
-
 	workDir, err = ioutil.TempDir("", "gophertest")
 	if err != nil {
 		return errors.Wrap(err, "creating work directory")
@@ -145,6 +143,12 @@ func Main() error {
 		fmt.Fprintf(os.Stderr, "no packages to build")
 		os.Exit(-1)
 	}
+
+	lock, err := util.LockDirectory(cacheDir)
+	if err != nil {
+		return errors.Wrapf(err, "locking cache dir %q", cacheDir)
+	}
+	defer lock.Unlock()
 
 	fullPackages := append([]string(nil), testPackages...)
 	fullPackages = append(fullPackages, runner.Deps...)
