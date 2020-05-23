@@ -48,11 +48,6 @@ func (s *Storer) Visit(ctx context.Context, node *dag.Node) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	lock, err := util.LockDirectory(cacheDir)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	defer lock.Unlock()
 
 	dstFile := path.Join(cacheDir, "cache.obj")
 	err = util.FileCopy(node.Shlib, dstFile)

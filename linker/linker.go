@@ -29,7 +29,6 @@ type Linker struct {
 func (l *Linker) Visit(ctx context.Context, node *dag.Node) error {
 	if node.ImportPath != "main" {
 		if len(node.Deps) == 0 {
-			fmt.Printf("warn: node without dependents %q\n", node.ImportPath)
 			return nil
 		}
 		if node.Intrinsic {

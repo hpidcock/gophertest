@@ -34,6 +34,7 @@ type Test struct {
 
 var Deps = []string{
 	"bytes",
+	"flag",
 	"fmt",
 	"io",
 	"os",
@@ -52,6 +53,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -141,9 +143,17 @@ func init() {
 				fmt.Fprintf(os.Stderr, "error parsing %q: %v", concurrentEnvName, err)
 				os.Exit(1)
 			}
-			if concurrent < 0 {
-				concurrent = 1
-			}
+		}
+		fs := flag.NewFlagSet("gophertest", flag.ExitOnError)
+		fs.IntVar(&concurrent, "gophertest.concurrent", concurrent, "test concurrency")
+		fs.Usage = func() {
+			fmt.Fprintf(fs.Output(), "gophertest: all arguments after -- are passed to the tests\n")
+			fs.PrintDefaults()
+		}
+		fs.Parse(os.Args[1:])
+		args := fs.Args()
+		if concurrent < 0 {
+			concurrent = 1
 		}
 		if concurrent > 1 {
 			sort.Slice(targets, func(i, j int) bool {
@@ -151,7 +161,7 @@ func init() {
 				return targets[i].complexity > targets[j].complexity
 			})
 		}
-		all(concurrent)
+		all(concurrent, args)
 	}
 
 	if selectedTarget == nil && pkg != "" {
@@ -187,7 +197,7 @@ func main() {
 	selectedTarget.testMain(m)
 }
 
-func all(concurrent int) {
+func all(concurrent int, args []string) {
 	bin := os.Args[0]
 	if !path.IsAbs(bin) {
 		cwd, err := os.Getwd()
@@ -203,7 +213,6 @@ func all(concurrent int) {
 	}
 	mutex := make(chan struct{}, 1)
 	mutex <- struct{}{}
-	args := os.Args[1:]
 	exitCode := 0
 	for _, v := range targets {
 		t := v

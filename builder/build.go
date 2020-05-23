@@ -35,6 +35,7 @@ type BuildInfo struct {
 
 	BuildID string
 
+	BuildDir         string
 	WorkDir          string
 	CompileSourceDir string
 
@@ -66,7 +67,8 @@ func (b *Builder) Visit(ctx context.Context, node *dag.Node) error {
 		return fmt.Errorf("build id missing for %q", node.ImportPath)
 	}
 
-	bi.WorkDir = path.Join(append([]string{b.WorkDir, "build"}, strings.Split(node.ImportPath, "/")...)...)
+	bi.BuildDir = path.Join(b.WorkDir, "build")
+	bi.WorkDir = path.Join(append([]string{bi.BuildDir}, strings.Split(node.ImportPath, "/")...)...)
 	err = os.MkdirAll(bi.WorkDir, 0777)
 	if err != nil {
 		return err
@@ -189,7 +191,7 @@ func (b *Builder) genSymABIs(ctx context.Context, node *dag.Node, bi *BuildInfo)
 		Files:            asmFiles,
 		Stdout:           out,
 		Stderr:           out,
-		TrimPath:         bi.WorkDir + "=>",
+		TrimPath:         bi.BuildDir + "=>",
 		IncludeDirs:      []string{bi.WorkDir, path.Join(b.BuildCtx.GOROOT, "pkg", "include")},
 		Defines: []string{
 			"GOOS_" + b.BuildCtx.GOOS,
@@ -217,7 +219,7 @@ func (b *Builder) asmBuild(ctx context.Context, node *dag.Node, bi *BuildInfo) e
 			Files:            []string{asmFile.Filename},
 			Stdout:           out,
 			Stderr:           out,
-			TrimPath:         bi.WorkDir + "=>",
+			TrimPath:         bi.BuildDir + "=>",
 			IncludeDirs:      []string{bi.WorkDir, path.Join(b.BuildCtx.GOROOT, "pkg", "include")},
 			Defines: []string{
 				"GOOS_" + b.BuildCtx.GOOS,
@@ -285,7 +287,7 @@ func (b *Builder) build(ctx context.Context, node *dag.Node, bi *BuildInfo) erro
 		Files:                    files,
 		Stdout:                   out,
 		Stderr:                   out,
-		TrimPath:                 bi.WorkDir + "=>",
+		TrimPath:                 bi.BuildDir + "=>",
 		Concurrency:              4,
 		PackageImportPath:        node.ImportPath,
 		ImportConfigFile:         bi.ImportConfigFile,

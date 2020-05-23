@@ -46,11 +46,6 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 	if _, err := os.Stat(cacheObj); os.IsNotExist(err) {
 		return nil
 	}
-	lock, err := util.LockDirectory(cacheDir)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	defer lock.Unlock()
 
 	out := &bytes.Buffer{}
 	readBuildID, err := p.Tools.BuildID(build.BuildIDArgs{
@@ -66,18 +61,7 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 		return nil
 	}
 
-	workCache := path.Join(p.WorkDir, "cache", node.ImportPath)
-	err = os.MkdirAll(workCache, 0777)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	cacheObjCopy := path.Join(workCache, "cache.obj")
-	err = util.FileCopy(cacheObj, cacheObjCopy)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	node.Shlib = cacheObjCopy
+	node.Shlib = cacheObj
 
 	goFiles, err := filepath.Glob(path.Join(cacheDir, "*.go"))
 	if err != nil {
@@ -86,9 +70,8 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 	overwriteGoFiles := map[string]struct{}{}
 	for _, v := range goFiles {
 		filename := path.Base(v)
-		err := util.FileCopy(v, path.Join(workCache, filename))
-		if err != nil {
-			return errors.WithStack(err)
+		if _, err := os.Stat(v); err != nil {
+			return errors.WithMessagef(err, "looking for cached go file %q", v)
 		}
 		overwriteGoFiles[filename] = struct{}{}
 	}
@@ -100,9 +83,8 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 	overwriteSFiles := map[string]struct{}{}
 	for _, v := range sFiles {
 		filename := path.Base(v)
-		err := util.FileCopy(v, path.Join(workCache, filename))
-		if err != nil {
-			return errors.WithStack(err)
+		if _, err := os.Stat(v); err != nil {
+			return errors.WithMessagef(err, "looking for cached asm file %q", v)
 		}
 		overwriteSFiles[filename] = struct{}{}
 	}
@@ -114,12 +96,12 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 			continue
 		}
 		delete(overwriteGoFiles, v.Filename)
-		v.Dir = workCache
+		v.Dir = cacheDir
 		replacementGoFiles = append(replacementGoFiles, v)
 	}
 	for k := range overwriteGoFiles {
 		goFile := dag.GoFile{
-			Dir:      workCache,
+			Dir:      cacheDir,
 			Filename: k,
 			Test:     strings.HasSuffix(k, "_test.go"),
 		}
@@ -134,12 +116,12 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 			continue
 		}
 		delete(overwriteSFiles, v.Filename)
-		v.Dir = workCache
+		v.Dir = cacheDir
 		replacementSFiles = append(replacementSFiles, v)
 	}
 	for k := range overwriteSFiles {
 		goFile := dag.SFile{
-			Dir:      workCache,
+			Dir:      cacheDir,
 			Filename: k,
 		}
 		replacementSFiles = append(replacementSFiles, goFile)
