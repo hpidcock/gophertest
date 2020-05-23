@@ -41,12 +41,13 @@ var (
 )
 
 var (
-	flagStdin       = flag.Bool("stdin", false, "Read package names from stdin")
-	flagFile        = flag.String("f", "", "Read package names from file")
-	flagPkgDir      = flag.String("p", "", "Group package directory (default is working directory)")
-	flagOut         = flag.String("o", "gopher.test", "Output binary")
-	flagKeepWorkDir = flag.Bool("keep-work-dir", false, "Prints out work dir and doesn't delete it")
-	flagLogBuild    = flag.Bool("x", false, "Log build commands")
+	flagStdin       = flag.Bool("stdin", false, "read package names from stdin")
+	flagFile        = flag.String("f", "", "read package names from file")
+	flagPkgDir      = flag.String("p", "", "group package directory (default is working directory)")
+	flagOut         = flag.String("o", "gopher.test", "output binary")
+	flagKeepWorkDir = flag.Bool("keep-work-dir", false, "prints out work dir and doesn't delete it")
+	flagLogBuild    = flag.Bool("x", false, "log build commands")
+	flagIgnoreCache = flag.Bool("a", false, "force rebuilding")
 )
 
 func main() {
@@ -181,14 +182,16 @@ func Main() error {
 		return errors.Wrap(err, "hashing source")
 	}
 
-	err = d.VisitAllFromRight(context.Background(), &puller.Puller{
-		BuildCtx: buildCtx,
-		Tools:    tools,
-		WorkDir:  workDir,
-		CacheDir: cacheDir,
-	})
-	if err != nil {
-		return errors.Wrap(err, "pulling from cache")
+	if *flagIgnoreCache == false {
+		err = d.VisitAllFromRight(context.Background(), &puller.Puller{
+			BuildCtx: buildCtx,
+			Tools:    tools,
+			WorkDir:  workDir,
+			CacheDir: cacheDir,
+		})
+		if err != nil {
+			return errors.Wrap(err, "pulling from cache")
+		}
 	}
 
 	di := &deferredinit.DeferredIniter{
