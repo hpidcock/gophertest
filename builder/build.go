@@ -43,6 +43,7 @@ type BuildInfo struct {
 	ASMImportFile    string
 	SymABIsFile      string
 	ImportConfigFile string
+	IncludeDir       string
 }
 
 func (b *Builder) Visit(ctx context.Context, node *dag.Node) error {
@@ -68,7 +69,7 @@ func (b *Builder) Visit(ctx context.Context, node *dag.Node) error {
 	}
 
 	bi.BuildDir = path.Join(b.WorkDir, "build")
-	bi.WorkDir = path.Join(append([]string{bi.BuildDir}, strings.Split(node.ImportPath, "/")...)...)
+	bi.WorkDir = path.Join(append([]string{bi.BuildDir}, strings.Split(strings.TrimSuffix(node.ImportPath, "_test"), "/")...)...)
 	err = os.MkdirAll(bi.WorkDir, 0777)
 	if err != nil {
 		return err
@@ -110,10 +111,15 @@ func (b *Builder) Visit(ctx context.Context, node *dag.Node) error {
 	}
 
 	bi.HasASM = len(node.SFiles) > 0
-	bi.ObjFile = path.Join(bi.WorkDir, "obj")
-	bi.ASMImportFile = path.Join(bi.WorkDir, "go_asm.h")
-	bi.SymABIsFile = path.Join(bi.WorkDir, "symabis")
-	bi.ImportConfigFile = path.Join(bi.WorkDir, "importcfg")
+	bi.IncludeDir = path.Join(bi.WorkDir, fmt.Sprintf("include_%s", node.Name))
+	err = os.MkdirAll(bi.IncludeDir, 0777)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	bi.ObjFile = path.Join(bi.WorkDir, fmt.Sprintf("%s.obj", node.Name))
+	bi.ASMImportFile = path.Join(bi.IncludeDir, "go_asm.h")
+	bi.SymABIsFile = path.Join(bi.WorkDir, fmt.Sprintf("%s_symabis", node.Name))
+	bi.ImportConfigFile = path.Join(bi.WorkDir, fmt.Sprintf("%s_importcfg", node.Name))
 
 	// GOROOT non-domain packages are considered std lib packages by gc.
 	bi.CompilingStandardLibrary = node.Goroot && !strings.Contains(strings.Split(node.ImportPath, "/")[0], ".")
@@ -192,7 +198,7 @@ func (b *Builder) genSymABIs(ctx context.Context, node *dag.Node, bi *BuildInfo)
 		Stdout:           out,
 		Stderr:           out,
 		TrimPath:         bi.BuildDir + "=>",
-		IncludeDirs:      []string{bi.WorkDir, path.Join(b.BuildCtx.GOROOT, "pkg", "include")},
+		IncludeDirs:      []string{bi.IncludeDir, bi.WorkDir, path.Join(b.BuildCtx.GOROOT, "pkg", "include")},
 		Defines: []string{
 			"GOOS_" + b.BuildCtx.GOOS,
 			"GOARCH_" + b.BuildCtx.GOARCH,
@@ -220,7 +226,7 @@ func (b *Builder) asmBuild(ctx context.Context, node *dag.Node, bi *BuildInfo) e
 			Stdout:           out,
 			Stderr:           out,
 			TrimPath:         bi.BuildDir + "=>",
-			IncludeDirs:      []string{bi.WorkDir, path.Join(b.BuildCtx.GOROOT, "pkg", "include")},
+			IncludeDirs:      []string{bi.IncludeDir, bi.WorkDir, path.Join(b.BuildCtx.GOROOT, "pkg", "include")},
 			Defines: []string{
 				"GOOS_" + b.BuildCtx.GOOS,
 				"GOARCH_" + b.BuildCtx.GOARCH,

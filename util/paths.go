@@ -4,13 +4,14 @@ import (
 	"go/build"
 	"os"
 	"path"
+	"strings"
 
 	"github.com/nightlyone/lockfile"
 	"github.com/pkg/errors"
 )
 
 func PackageCacheDir(cacheDir string, importPath string) string {
-	return path.Join(cacheDir, importPath)
+	return path.Join(cacheDir, strings.TrimSuffix(importPath, "_test"))
 }
 
 func LockDirectory(dir string) (lockfile.Lockfile, error) {
