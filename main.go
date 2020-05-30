@@ -57,7 +57,7 @@ func main() {
 	}
 }
 
-func Main() error {
+func Main() (errOut error) {
 	var err error
 
 	buildCtx.GOARCH = env("GOARCH", buildCtx.GOARCH)
@@ -236,6 +236,48 @@ func Main() error {
 		return errors.Wrap(err, "generating main")
 	}
 
+	defer func() {
+		storer := &storer.Storer{
+			BuildCtx: buildCtx,
+			Tools:    tools,
+			CacheDir: cacheDir,
+		}
+		err := d.VisitAllFromRight(context.Background(), dag.VisitorFunc(storer.Cleanup))
+		if err != nil {
+			err = errors.Wrap(err, "cleanup cache")
+			if errOut != nil {
+				fmt.Println(err.Error())
+			} else {
+				errOut = err
+			}
+			return
+		}
+
+		err = d.VisitAllFromRight(context.Background(), dag.VisitorFunc(storer.Update))
+		if err != nil {
+			err = errors.Wrap(err, "updating cache")
+			if errOut != nil {
+				fmt.Println(err.Error())
+			} else {
+				errOut = err
+			}
+			return
+		}
+
+		if !*flagKeepWorkDir {
+			err := os.RemoveAll(workDir)
+			if err != nil {
+				err = errors.Wrap(err, "cleaning work dir")
+				if errOut != nil {
+					fmt.Println(err.Error())
+				} else {
+					errOut = err
+				}
+				return
+			}
+		}
+	}()
+
 	err = d.VisitAllFromRight(context.Background(), &builder.Builder{
 		BuildCtx: buildCtx,
 		Tools:    tools,
@@ -253,22 +295,6 @@ func Main() error {
 	})
 	if err != nil {
 		return errors.Wrap(err, "linking")
-	}
-
-	err = d.VisitAllFromRight(context.Background(), &storer.Storer{
-		BuildCtx: buildCtx,
-		Tools:    tools,
-		CacheDir: cacheDir,
-	})
-	if err != nil {
-		return errors.Wrap(err, "updating cache")
-	}
-
-	if !*flagKeepWorkDir {
-		err = os.RemoveAll(workDir)
-		if err != nil {
-			return errors.Wrap(err, "cleaning work dir")
-		}
 	}
 
 	return nil

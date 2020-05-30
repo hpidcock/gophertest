@@ -1,4 +1,4 @@
 package version
 
 // String version
-const String = "0.0.1"
+const String = "0.0.2"

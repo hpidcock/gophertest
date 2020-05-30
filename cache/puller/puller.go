@@ -5,9 +5,9 @@ import (
 	"context"
 	"fmt"
 	gobuild "go/build"
+	"io/ioutil"
 	"os"
 	"path"
-	"path/filepath"
 	"strings"
 
 	"github.com/gophertest/build"
@@ -42,7 +42,19 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 	}
 
 	cacheDir := util.PackageCacheDir(p.CacheDir, node.ImportPath)
-	cacheObj := path.Join(cacheDir, "cache.obj")
+
+	manifestFilepath := path.Join(cacheDir, fmt.Sprintf("%s.manifest", node.Name))
+	if _, err := os.Stat(manifestFilepath); os.IsNotExist(err) {
+		return nil
+	}
+
+	manifestBytes, err := ioutil.ReadFile(manifestFilepath)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	manifest := strings.Split(string(manifestBytes), "\n")
+
+	cacheObj := path.Join(cacheDir, fmt.Sprintf("%s.obj", node.Name))
 	if _, err := os.Stat(cacheObj); os.IsNotExist(err) {
 		return nil
 	}
@@ -61,30 +73,30 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 		return nil
 	}
 
-	node.Shlib = cacheObj
-
-	goFiles, err := filepath.Glob(path.Join(cacheDir, "*.go"))
-	if err != nil {
-		return errors.WithStack(err)
-	}
 	overwriteGoFiles := map[string]struct{}{}
-	for _, v := range goFiles {
-		filename := path.Base(v)
-		if _, err := os.Stat(v); err != nil {
-			return errors.WithMessagef(err, "looking for cached go file %q", v)
+	for _, filename := range manifest {
+		if !strings.HasSuffix(filename, ".go") {
+			continue
+		}
+		filepath := path.Join(cacheDir, filename)
+		if _, err := os.Stat(filepath); os.IsNotExist(err) {
+			return nil
+		} else if err != nil {
+			return errors.WithMessagef(err, "looking for cached go file %q", filename)
 		}
 		overwriteGoFiles[filename] = struct{}{}
 	}
 
-	sFiles, err := filepath.Glob(path.Join(cacheDir, "*.s"))
-	if err != nil {
-		return errors.WithStack(err)
-	}
 	overwriteSFiles := map[string]struct{}{}
-	for _, v := range sFiles {
-		filename := path.Base(v)
-		if _, err := os.Stat(v); err != nil {
-			return errors.WithMessagef(err, "looking for cached asm file %q", v)
+	for _, filename := range manifest {
+		if !strings.HasSuffix(filename, ".s") {
+			continue
+		}
+		filepath := path.Join(cacheDir, filename)
+		if _, err := os.Stat(filepath); os.IsNotExist(err) {
+			return nil
+		} else if err != nil {
+			return errors.WithMessagef(err, "looking for cached asm file %q", filename)
 		}
 		overwriteSFiles[filename] = struct{}{}
 	}
@@ -107,7 +119,6 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 		}
 		replacementGoFiles = append(replacementGoFiles, goFile)
 	}
-	node.GoFiles = replacementGoFiles
 
 	replacementSFiles := []dag.SFile(nil)
 	for _, v := range node.SFiles {
@@ -126,6 +137,9 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 		}
 		replacementSFiles = append(replacementSFiles, goFile)
 	}
+
+	node.Shlib = cacheObj
+	node.GoFiles = replacementGoFiles
 	node.SFiles = replacementSFiles
 
 	return nil
