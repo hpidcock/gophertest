@@ -1,6 +1,7 @@
 package dag
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -12,18 +13,26 @@ import (
 	"github.com/pkg/errors"
 )
 
+type Logger interface {
+	Infof(format string, args ...interface{})
+}
+
 type DAG struct {
+	logger Logger
 	// leftLeaf is nodes without dependants
 	leftLeaf map[*Node]*Node
 	// rightLeaf is nodes without imports
 	rightLeaf map[*Node]*Node
 	nodes     map[string]*Node
 
+	flagGeneration int
+
 	mutex sync.Mutex
 }
 
-func NewDAG() *DAG {
+func NewDAG(logger Logger) *DAG {
 	return &DAG{
+		logger:    logger,
 		leftLeaf:  make(map[*Node]*Node),
 		rightLeaf: make(map[*Node]*Node),
 		nodes:     make(map[string]*Node),
@@ -270,6 +279,7 @@ func (d *DAG) CheckComplete() error {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
+	d.logger.Infof("checking all nodes are loaded")
 	for _, node := range d.nodes {
 		var err error
 		node.Mutex.Lock()
@@ -282,6 +292,7 @@ func (d *DAG) CheckComplete() error {
 		}
 	}
 
+	d.logger.Infof("checking left")
 	for _, node := range d.leftLeaf {
 		var err error
 		node.Mutex.Lock()
@@ -294,6 +305,7 @@ func (d *DAG) CheckComplete() error {
 		}
 	}
 
+	d.logger.Infof("checking right")
 	for _, node := range d.rightLeaf {
 		var err error
 		node.Mutex.Lock()
@@ -306,9 +318,18 @@ func (d *DAG) CheckComplete() error {
 		}
 	}
 
+	d.logger.Infof("checking for cycles")
+	d.mutex.Unlock()
+	err := d.CheckForCycles()
+	d.mutex.Lock()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	d.logger.Infof("checking all nodes are reachable from right")
 	d.mutex.Unlock()
 	countRight := int64(0)
-	err := d.VisitAllFromRight(context.Background(), VisitorFunc(func(ctx context.Context, n *Node) error {
+	err = d.VisitAllFromRight(context.Background(), VisitorFunc(func(ctx context.Context, n *Node) error {
 		atomic.AddInt64(&countRight, 1)
 		return nil
 	}))
@@ -321,6 +342,7 @@ func (d *DAG) CheckComplete() error {
 		return fmt.Errorf("unable to visit all nodes from right")
 	}
 
+	d.logger.Infof("checking all nodes are reachable from left")
 	d.mutex.Unlock()
 	countLeft := int64(0)
 	err = d.VisitAllFromRight(context.Background(), VisitorFunc(func(ctx context.Context, n *Node) error {
@@ -336,6 +358,86 @@ func (d *DAG) CheckComplete() error {
 		return fmt.Errorf("unable to visit all nodes from left")
 	}
 
+	return nil
+}
+
+type cycleError struct {
+	imports []string
+}
+
+func (c *cycleError) Error() string {
+	buf := &bytes.Buffer{}
+	for i := len(c.imports) - 1; i >= 0; i-- {
+		fmt.Fprintln(buf, c.imports[i])
+	}
+	return buf.String()
+}
+
+func (d *DAG) CheckForCycles() error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+	cycleErrors := []*cycleError(nil)
+	for _, node := range d.nodes {
+		d.flagGeneration++
+		var err error
+		node.Mutex.RLock()
+		for _, importedNode := range node.Imports {
+			err = d.checkForCycles(node, importedNode)
+			if c, ok := err.(*cycleError); ok {
+				c.imports = append(c.imports, node.ImportPath)
+				cycleErrors = append(cycleErrors, c)
+				err = nil
+			} else if err != nil {
+				break
+			}
+		}
+		node.Mutex.RUnlock()
+		if err != nil {
+			return errors.WithStack(err)
+		}
+	}
+	if len(cycleErrors) > 0 {
+		for _, v := range cycleErrors {
+			d.logger.Infof("cycle error: %s", v.Error())
+		}
+		return fmt.Errorf("cycle errors found")
+	}
+	return nil
+}
+
+func (d *DAG) checkForCycles(top *Node, node Import) error {
+	if top == node.Node {
+		t := ""
+		if node.Test {
+			t = "t: "
+		}
+		return &cycleError{imports: []string{t + node.ImportPath}}
+	}
+	node.Mutex.Lock()
+	if node.flagGeneration != d.flagGeneration {
+		node.flags = 0
+		node.flagGeneration = d.flagGeneration
+	}
+	if node.flags&Visited != 0 {
+		node.Mutex.Unlock()
+		return nil
+	}
+	node.flags |= Visited
+	importCopy := append(make([]Import, 0, len(node.Imports)), node.Imports...)
+	node.Mutex.Unlock()
+	for _, imported := range importCopy {
+		err := d.checkForCycles(top, imported)
+		if c, ok := err.(*cycleError); ok {
+			t := ""
+			if node.Test {
+				t = "t: "
+			}
+			c.imports = append(c.imports, t+node.ImportPath)
+			return c
+		} else if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -374,88 +476,90 @@ func (d *DAG) visitAll(ctx context.Context,
 	alreadyAdded map[*Node]struct{},
 	alreadyVisited map[*Node]struct{},
 ) error {
-	if len(pass) == 0 {
-		return nil
-	}
-
-	var nextPass []*Node
-	var thisPass []*Node
-
-	eg, egCtx := errgroup.WithContext(ctx)
-	for _, n := range pass {
-		node := n
-		node.Mutex.Lock()
-		ready := true
-		switch direction {
-		case Left:
-			for _, imported := range node.Imports {
-				if _, ok := alreadyVisited[imported.Node]; !ok {
-					ready = false
-					break
-				}
-			}
-		case Right:
-			if node.NodeBits == nil {
-				break
-			}
-			for _, dep := range node.Deps {
-				if _, ok := alreadyVisited[dep]; !ok {
-					ready = false
-					break
-				}
-			}
+	for {
+		if len(pass) == 0 {
+			return nil
 		}
-		if !ready {
+
+		var nextPass []*Node
+		var thisPass []*Node
+
+		eg, egCtx := errgroup.WithContext(ctx)
+		for _, n := range pass {
+			node := n
+			node.Mutex.Lock()
+			ready := true
+			switch direction {
+			case Left:
+				for _, imported := range node.Imports {
+					if _, ok := alreadyVisited[imported.Node]; !ok {
+						ready = false
+						break
+					}
+				}
+			case Right:
+				if node.NodeBits == nil {
+					break
+				}
+				for _, dep := range node.Deps {
+					if _, ok := alreadyVisited[dep]; !ok {
+						ready = false
+						break
+					}
+				}
+			}
+			if !ready {
+				node.Mutex.Unlock()
+				nextPass = append(nextPass, n)
+				continue
+			}
+			thisPass = append(thisPass, n)
+			eg.Go(func() error {
+				defer node.Mutex.Unlock()
+				return v.Visit(egCtx, node)
+			})
+		}
+
+		err := eg.Wait()
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		d.mutex.Lock()
+		for _, node := range thisPass {
+			alreadyVisited[node] = struct{}{}
+			node.Mutex.Lock()
+			switch direction {
+			case Left:
+				for _, dep := range node.Deps {
+					if _, ok := alreadyAdded[dep]; ok {
+						continue
+					}
+					if _, ok := d.nodes[dep.ImportPath]; !ok {
+						continue
+					}
+					alreadyAdded[dep] = struct{}{}
+					nextPass = append(nextPass, dep)
+				}
+			case Right:
+				if node.NodeBits == nil {
+					break
+				}
+				for _, imported := range node.Imports {
+					if _, ok := alreadyAdded[imported.Node]; ok {
+						continue
+					}
+					if _, ok := d.nodes[imported.ImportPath]; !ok {
+						continue
+					}
+					alreadyAdded[imported.Node] = struct{}{}
+					nextPass = append(nextPass, imported.Node)
+				}
+			}
 			node.Mutex.Unlock()
-			nextPass = append(nextPass, n)
-			continue
 		}
-		thisPass = append(thisPass, n)
-		eg.Go(func() error {
-			defer node.Mutex.Unlock()
-			return v.Visit(egCtx, node)
-		})
-	}
+		d.mutex.Unlock()
 
-	err := eg.Wait()
-	if err != nil {
-		return errors.WithStack(err)
+		pass = nextPass
 	}
-
-	d.mutex.Lock()
-	for _, node := range thisPass {
-		alreadyVisited[node] = struct{}{}
-		node.Mutex.Lock()
-		switch direction {
-		case Left:
-			for _, dep := range node.Deps {
-				if _, ok := alreadyAdded[dep]; ok {
-					continue
-				}
-				if _, ok := d.nodes[dep.ImportPath]; !ok {
-					continue
-				}
-				alreadyAdded[dep] = struct{}{}
-				nextPass = append(nextPass, dep)
-			}
-		case Right:
-			if node.NodeBits == nil {
-				break
-			}
-			for _, imported := range node.Imports {
-				if _, ok := alreadyAdded[imported.Node]; ok {
-					continue
-				}
-				if _, ok := d.nodes[imported.ImportPath]; !ok {
-					continue
-				}
-				alreadyAdded[imported.Node] = struct{}{}
-				nextPass = append(nextPass, imported.Node)
-			}
-		}
-		node.Mutex.Unlock()
-	}
-	d.mutex.Unlock()
-
-	return d.visitAll(ctx, v, nextPass, direction, alreadyAdded, alreadyVisited)
 }

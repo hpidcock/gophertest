@@ -23,7 +23,12 @@ import (
 	"github.com/pkg/errors"
 )
 
+type Logger interface {
+	Infof(format string, args ...interface{})
+}
+
 type Generator struct {
+	Logger   Logger
 	BuildCtx gobuild.Context
 	Tools    build.Tools
 

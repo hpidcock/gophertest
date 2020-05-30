@@ -19,11 +19,16 @@ import (
 	"github.com/hpidcock/gophertest/version"
 )
 
+type Logger interface {
+	Infof(format string, args ...interface{})
+}
+
 type HashMeta struct {
 	BuildID string
 }
 
 type Hasher struct {
+	Logger   Logger
 	BuildCtx gobuild.Context
 	Tools    build.Tools
 }

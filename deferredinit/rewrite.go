@@ -26,6 +26,10 @@ import (
 	"github.com/pkg/errors"
 )
 
+type Logger interface {
+	Infof(format string, args ...interface{})
+}
+
 type initAssign struct {
 	order     int
 	statement ast.Stmt
@@ -33,6 +37,7 @@ type initAssign struct {
 }
 
 type DeferredIniter struct {
+	Logger   Logger
 	BuildCtx gobuild.Context
 	Tools    build.Tools
 

@@ -6,12 +6,21 @@ import (
 	"sync"
 )
 
+type Flags uint32
+
+const (
+	Visited Flags = 1 << iota
+)
+
 type Node struct {
 	*NodeBits
 	ImportPath string
 	Deps       []*Node
 
-	Mutex sync.Mutex
+	Mutex sync.RWMutex
+
+	flags          Flags
+	flagGeneration int
 }
 
 type NodeBits struct {

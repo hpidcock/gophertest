@@ -17,7 +17,12 @@ import (
 	"github.com/hpidcock/gophertest/dag"
 )
 
+type Logger interface {
+	Infof(format string, args ...interface{})
+}
+
 type Storer struct {
+	Logger   Logger
 	BuildCtx gobuild.Context
 	Tools    build.Tools
 
