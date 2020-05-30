@@ -26,7 +26,7 @@ type Puller struct {
 }
 
 func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
-	if node.ImportPath == "main" {
+	if node.ImportPath == "main" || node.Intrinsic {
 		return nil
 	}
 
@@ -57,6 +57,8 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 	cacheObj := path.Join(cacheDir, fmt.Sprintf("%s.obj", node.Name))
 	if _, err := os.Stat(cacheObj); os.IsNotExist(err) {
 		return nil
+	} else if err != nil {
+		return errors.WithStack(err)
 	}
 
 	out := &bytes.Buffer{}

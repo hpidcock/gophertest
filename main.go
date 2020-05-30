@@ -242,18 +242,7 @@ func Main() (errOut error) {
 			Tools:    tools,
 			CacheDir: cacheDir,
 		}
-		err := d.VisitAllFromRight(context.Background(), dag.VisitorFunc(storer.Cleanup))
-		if err != nil {
-			err = errors.Wrap(err, "cleanup cache")
-			if errOut != nil {
-				fmt.Println(err.Error())
-			} else {
-				errOut = err
-			}
-			return
-		}
-
-		err = d.VisitAllFromRight(context.Background(), dag.VisitorFunc(storer.Update))
+		err = d.VisitAllFromRight(context.Background(), storer)
 		if err != nil {
 			err = errors.Wrap(err, "updating cache")
 			if errOut != nil {
