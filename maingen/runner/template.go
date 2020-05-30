@@ -145,7 +145,7 @@ func init() {
 			}
 		}
 		fs := flag.NewFlagSet("gophertest", flag.ExitOnError)
-		fs.IntVar(&concurrent, "gophertest.concurrent", concurrent, "test concurrency")
+		fs.IntVar(&concurrent, "c", concurrent, "test concurrency")
 		fs.Usage = func() {
 			fmt.Fprintf(fs.Output(), "gophertest: all arguments after -- are passed to the tests\n")
 			fs.PrintDefaults()
