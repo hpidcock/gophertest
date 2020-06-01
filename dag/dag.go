@@ -441,6 +441,41 @@ func (d *DAG) checkForCycles(top *Node, node Import) error {
 	return nil
 }
 
+// VisitAll nodes in any order.
+func (d *DAG) VisitAll(ctx context.Context, v Visitor, concurrency int) error {
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+	slot := make(chan struct{}, concurrency)
+	for i := 0; i < concurrency; i++ {
+		slot <- struct{}{}
+	}
+	eg, egCtx := errgroup.WithContext(ctx)
+	for _, n := range d.nodes {
+		node := n
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-slot:
+			eg.Go(func() error {
+				defer func() {
+					slot <- struct{}{}
+				}()
+				node.Mutex.Lock()
+				defer node.Mutex.Unlock()
+				return v.Visit(egCtx, node)
+			})
+		}
+	}
+	err := eg.Wait()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
+}
+
 // VisitAllFromLeft visits each node from the left.
 // NOTE: do not Lock/Unlock the node, VisitAllFromLeft will Lock it for you.
 func (d *DAG) VisitAllFromLeft(ctx context.Context, v Visitor) error {

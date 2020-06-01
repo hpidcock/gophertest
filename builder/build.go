@@ -62,6 +62,8 @@ func (b *Builder) Visit(ctx context.Context, node *dag.Node) error {
 		return nil
 	}
 
+	b.Logger.Infof("building %q", node.ImportPath)
+
 	bi := &BuildInfo{}
 	for _, meta := range node.Meta {
 		switch m := meta.(type) {

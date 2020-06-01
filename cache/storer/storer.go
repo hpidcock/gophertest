@@ -68,6 +68,9 @@ func (s *Storer) Visit(ctx context.Context, node *dag.Node) (errOut error) {
 		}
 		manifest := strings.Split(string(manifestBytes), "\n")
 		for _, f := range manifest {
+			if f == "" {
+				continue
+			}
 			filepath := path.Join(cacheDir, f)
 			err := os.Remove(filepath)
 			if os.IsNotExist(err) {

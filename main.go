@@ -41,14 +41,15 @@ var (
 )
 
 var (
-	flagStdin       = flag.Bool("stdin", false, "read package names from stdin")
-	flagFile        = flag.String("f", "", "read package names from file")
-	flagPkgDir      = flag.String("p", "", "group package directory (default is working directory)")
-	flagOut         = flag.String("o", "gopher.test", "output binary")
-	flagKeepWorkDir = flag.Bool("keep-work-dir", false, "prints out work dir and doesn't delete it")
-	flagLogBuild    = flag.Bool("x", false, "log build commands")
-	flagIgnoreCache = flag.Bool("a", false, "force rebuilding")
-	flagVerbose     = flag.Bool("v", false, "verbose logging")
+	flagStdin           = flag.Bool("stdin", false, "read package names from stdin")
+	flagFile            = flag.String("f", "", "read package names from file")
+	flagPkgDir          = flag.String("p", "", "group package directory (default is working directory)")
+	flagOut             = flag.String("o", "gopher.test", "output binary")
+	flagKeepWorkDir     = flag.Bool("keep-work-dir", false, "prints out work dir and doesn't delete it")
+	flagLogBuild        = flag.Bool("x", false, "log build commands")
+	flagIgnoreCache     = flag.Bool("a", false, "force rebuilding")
+	flagSkipCacheUpdate = flag.Bool("u", false, "skip cache update")
+	flagVerbose         = flag.Bool("v", false, "verbose logging")
 )
 
 func main() {
@@ -159,6 +160,7 @@ func Main() (errOut error) {
 	}
 	defer lock.Unlock()
 
+	runtime.GC()
 	logger.Infof("importing packages")
 	fullPackages := append([]string(nil), testPackages...)
 	fullPackages = append(fullPackages, runner.Deps...)
@@ -169,6 +171,7 @@ func Main() (errOut error) {
 		testPackagesMap[importPath] = struct{}{}
 	}
 
+	runtime.GC()
 	logger.Infof("graphing packages")
 	d := dag.NewDAG(logger)
 	for _, pkg := range buildPkgs {
@@ -179,12 +182,14 @@ func Main() (errOut error) {
 		}
 	}
 
+	runtime.GC()
 	logger.Infof("validating dag")
 	err = d.CheckComplete()
 	if err != nil {
 		return errors.Wrap(err, "dag incomplete")
 	}
 
+	runtime.GC()
 	logger.Infof("hashing packages")
 	err = d.VisitAllFromRight(context.Background(), &hasher.Hasher{
 		Logger:   logger,
@@ -197,13 +202,14 @@ func Main() (errOut error) {
 
 	if *flagIgnoreCache == false {
 		logger.Infof("loading cache")
-		err = d.VisitAllFromRight(context.Background(), &puller.Puller{
+		pull := &puller.Puller{
 			Logger:   logger,
 			BuildCtx: buildCtx,
 			Tools:    tools,
 			WorkDir:  workDir,
 			CacheDir: cacheDir,
-		})
+		}
+		err = d.VisitAll(context.Background(), pull, runtime.NumCPU())
 		if err != nil {
 			return errors.Wrap(err, "pulling from cache")
 		}
@@ -211,6 +217,7 @@ func Main() (errOut error) {
 		logger.Infof("skipping cache")
 	}
 
+	runtime.GC()
 	di := &deferredinit.DeferredIniter{
 		Logger:    logger,
 		BuildCtx:  buildCtx,
@@ -236,6 +243,7 @@ func Main() (errOut error) {
 		return errors.Wrap(err, "rewriting tests")
 	}
 
+	runtime.GC()
 	logger.Infof("validating dag")
 	err = d.CheckComplete()
 	if err != nil {
@@ -249,6 +257,7 @@ func Main() (errOut error) {
 		WorkDir:  workDir,
 	}
 
+	runtime.GC()
 	logger.Infof("finding tests")
 	err = d.VisitAllFromRight(context.Background(), dag.VisitorFunc(gen.FindTests))
 	if err != nil {
@@ -260,24 +269,27 @@ func Main() (errOut error) {
 	if err != nil {
 		return errors.Wrap(err, "generating main")
 	}
+	gen = nil
 
 	defer func() {
-		storer := &storer.Storer{
-			Logger:   logger,
-			BuildCtx: buildCtx,
-			Tools:    tools,
-			CacheDir: cacheDir,
-		}
-		logger.Infof("storing build result in cache")
-		err = d.VisitAllFromRight(context.Background(), storer)
-		if err != nil {
-			err = errors.Wrap(err, "updating cache")
-			if errOut != nil {
-				fmt.Println(err.Error())
-			} else {
-				errOut = err
+		if !*flagSkipCacheUpdate {
+			storer := &storer.Storer{
+				Logger:   logger,
+				BuildCtx: buildCtx,
+				Tools:    tools,
+				CacheDir: cacheDir,
 			}
-			return
+			logger.Infof("storing build result in cache")
+			err = d.VisitAll(context.Background(), storer, runtime.NumCPU())
+			if err != nil {
+				err = errors.Wrap(err, "updating cache")
+				if errOut != nil {
+					fmt.Println(err.Error())
+				} else {
+					errOut = err
+				}
+				return
+			}
 		}
 
 		if !*flagKeepWorkDir {
@@ -295,6 +307,7 @@ func Main() (errOut error) {
 		}
 	}()
 
+	runtime.GC()
 	logger.Infof("building packages")
 	err = d.VisitAllFromRight(context.Background(), &builder.Builder{
 		Logger:   logger,
@@ -306,6 +319,7 @@ func Main() (errOut error) {
 		return errors.Wrap(err, "compiling")
 	}
 
+	runtime.GC()
 	logger.Infof("linking executable")
 	err = d.VisitAllFromRight(context.Background(), &linker.Linker{
 		Logger:   logger,
