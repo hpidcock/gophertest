@@ -52,15 +52,15 @@ type DeferredIniter struct {
 }
 
 func (d *DeferredIniter) CollectPackages(ctx context.Context, node *dag.Node) error {
-	if node.Shlib != "" {
-		return nil
-	}
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 	if d.nodes == nil {
 		d.nodes = make(map[string]*dag.Node)
 	}
 	d.nodes[node.ImportPath] = node
+	if node.Shlib != "" {
+		return nil
+	}
 	if !node.Tests {
 		return nil
 	}
