@@ -33,11 +33,17 @@ type Linker struct {
 
 func (l *Linker) Visit(ctx context.Context, node *dag.Node) error {
 	if node.ImportPath != "main" {
-		if len(node.Deps) == 0 {
-			return nil
-		}
 		if node.Intrinsic {
 			return nil
+		}
+		switch node.LinkMode {
+		case dag.NeverLink:
+			return nil
+		case dag.LinkIfNeeded:
+			if len(node.Deps) == 0 {
+				return nil
+			}
+		case dag.AlwaysLink:
 		}
 		if node.Shlib == "" {
 			return fmt.Errorf("missing shlib for %q", node.ImportPath)

@@ -221,7 +221,7 @@ func (g *Generator) GenerateMain(ctx context.Context, d *dag.DAG) error {
 		Dir:        srcDir,
 		Imports:    rawImports,
 	}
-	node, err := d.Add(pkg, false)
+	node, err := d.Add(pkg, false, true)
 	if err != nil {
 		return errors.WithStack(err)
 	}

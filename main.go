@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"runtime"
+	"strings"
 
 	"github.com/gophertest/build"
 	"github.com/pkg/errors"
@@ -50,6 +51,8 @@ var (
 	flagIgnoreCache     = flag.Bool("a", false, "force rebuilding")
 	flagSkipCacheUpdate = flag.Bool("u", false, "skip cache update")
 	flagVerbose         = flag.Bool("v", false, "verbose logging")
+	flagGraph           = flag.String("g", "", "output graph to file and exit")
+	flagGraphNodes      = flag.String("gn", "", "node keys to graph comma seperated")
 )
 
 func main() {
@@ -145,7 +148,7 @@ func Main() (errOut error) {
 		testPackages = os.Args[len(os.Args)-remaining:]
 	}
 	if inputTypes != 1 {
-		fmt.Fprintf(os.Stderr, "only one of -f or -stdin or command line packages can be passed")
+		fmt.Fprintf(os.Stderr, "only one of -f or -stdin or command line packages can be passed\n")
 		flag.PrintDefaults()
 		os.Exit(-1)
 	}
@@ -176,7 +179,7 @@ func Main() (errOut error) {
 	d := dag.NewDAG(logger)
 	for _, pkg := range buildPkgs {
 		_, includeTests := testPackagesMap[pkg.ImportPath]
-		_, err := d.Add(pkg, includeTests)
+		_, err := d.Add(pkg, includeTests, false)
 		if err != nil {
 			return errors.Wrapf(err, "adding %q to dag", pkg.ImportPath)
 		}
@@ -184,7 +187,29 @@ func Main() (errOut error) {
 
 	runtime.GC()
 	logger.Infof("validating dag")
-	err = d.CheckComplete()
+	err = d.CheckComplete(false)
+	if err != nil {
+		return errors.Wrap(err, "dag incomplete")
+	}
+
+	runtime.GC()
+	logger.Infof("checking for cycles")
+	err = d.CheckForCycles()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	err = d.CheckForCycles()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	if *flagGraph != "" {
+		return d.Graph(*flagGraph, strings.Split(*flagGraphNodes, ","))
+	}
+
+	runtime.GC()
+	logger.Infof("validating dag")
+	err = d.CheckComplete(true)
 	if err != nil {
 		return errors.Wrap(err, "dag incomplete")
 	}
@@ -245,7 +270,7 @@ func Main() (errOut error) {
 
 	runtime.GC()
 	logger.Infof("validating dag")
-	err = d.CheckComplete()
+	err = d.CheckComplete(true)
 	if err != nil {
 		return errors.Wrap(err, "dag incomplete")
 	}

@@ -48,7 +48,7 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 
 	cacheDir := util.PackageCacheDir(p.CacheDir, node.ImportPath)
 
-	manifestFilepath := path.Join(cacheDir, fmt.Sprintf("%s.manifest", node.Name))
+	manifestFilepath := path.Join(cacheDir, fmt.Sprintf("%s.manifest", node.CacheName))
 	if _, err := os.Stat(manifestFilepath); os.IsNotExist(err) {
 		return nil
 	}
@@ -59,7 +59,7 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 	}
 	manifest := strings.Split(string(manifestBytes), "\n")
 
-	cacheObj := path.Join(cacheDir, fmt.Sprintf("%s.obj", node.Name))
+	cacheObj := path.Join(cacheDir, fmt.Sprintf("%s.obj", node.CacheName))
 	if _, err := os.Stat(cacheObj); os.IsNotExist(err) {
 		return nil
 	} else if err != nil {

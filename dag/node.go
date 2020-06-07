@@ -12,8 +12,19 @@ const (
 	Visited Flags = 1 << iota
 )
 
+type LinkMode int
+
+const (
+	LinkIfNeeded LinkMode = iota
+	AlwaysLink   LinkMode = iota
+	NeverLink    LinkMode = iota
+)
+
+type NodeKey string
+
 type Node struct {
 	*NodeBits
+	NodeKey    NodeKey
 	ImportPath string
 	Deps       []*Node
 
@@ -24,17 +35,20 @@ type Node struct {
 }
 
 type NodeBits struct {
-	Name      string
-	Tests     bool
-	SourceDir string
-	RootDir   string
-	Goroot    bool
-	Standard  bool
-	Intrinsic bool
-	GoFiles   []GoFile
-	SFiles    []SFile
-	Imports   []Import
-	ImportMap map[string]string
+	Name        string
+	CacheName   string
+	Tests       bool
+	SourceDir   string
+	RootDir     string
+	Goroot      bool
+	Standard    bool
+	Intrinsic   bool
+	GoFiles     []GoFile
+	SFiles      []SFile
+	Imports     []Import
+	ImportMap   map[string]string
+	CyclicTests bool
+	LinkMode    LinkMode
 
 	Shlib string
 	Meta  []interface{}

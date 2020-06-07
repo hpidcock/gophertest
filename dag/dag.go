@@ -7,10 +7,10 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/pkg/errors"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/hpidcock/gophertest/packages"
-	"github.com/pkg/errors"
 )
 
 type Logger interface {
@@ -23,7 +23,7 @@ type DAG struct {
 	leftLeaf map[*Node]*Node
 	// rightLeaf is nodes without imports
 	rightLeaf map[*Node]*Node
-	nodes     map[string]*Node
+	nodes     map[NodeKey]*Node
 
 	flagGeneration int
 
@@ -35,7 +35,7 @@ func NewDAG(logger Logger) *DAG {
 		logger:    logger,
 		leftLeaf:  make(map[*Node]*Node),
 		rightLeaf: make(map[*Node]*Node),
-		nodes:     make(map[string]*Node),
+		nodes:     make(map[NodeKey]*Node),
 	}
 }
 
@@ -69,13 +69,13 @@ func (d *DAG) Remove(importPath string) error {
 	delete(d.rightLeaf, node)
 	if len(node.Deps) == 0 {
 		delete(d.leftLeaf, node)
-		delete(d.nodes, importPath)
+		delete(d.nodes, node.NodeKey)
 	}
 	d.mutex.Unlock()
 	return nil
 }
 
-func (d *DAG) Add(pkg *packages.Package, includeTests bool) (*Node, error) {
+func (d *DAG) Add(pkg *packages.Package, includeTests bool, useIsolated bool) (*Node, error) {
 	importPath := pkg.ImportPath
 	node := d.Obtain(importPath)
 	defer node.Mutex.Unlock()
@@ -84,8 +84,20 @@ func (d *DAG) Add(pkg *packages.Package, includeTests bool) (*Node, error) {
 		return nil, fmt.Errorf("package %q already has bits", importPath)
 	}
 
+	findOrObtain := d.Obtain
+	if useIsolated {
+		findOrObtain = func(importPath string) *Node {
+			isolated := d.FindByKey(NodeKey(importPath + "+isolated"))
+			if isolated != nil {
+				return isolated
+			}
+			return d.Obtain(importPath)
+		}
+	}
+
 	bits := &NodeBits{
 		Name:      pkg.Name,
+		CacheName: pkg.Name,
 		SourceDir: pkg.Dir,
 		RootDir:   pkg.Root,
 		Goroot:    pkg.Goroot,
@@ -132,7 +144,7 @@ func (d *DAG) Add(pkg *packages.Package, includeTests bool) (*Node, error) {
 				continue
 			}
 			alreadyImported[imported] = struct{}{}
-			importedNode := d.Obtain(imported)
+			importedNode := findOrObtain(imported)
 			importedNode.Deps = append(importedNode.Deps, node)
 			importedNode.Mutex.Unlock()
 			d.mutex.Lock()
@@ -149,7 +161,7 @@ func (d *DAG) Add(pkg *packages.Package, includeTests bool) (*Node, error) {
 			continue
 		}
 		alreadyImported[imported] = struct{}{}
-		importedNode := d.Obtain(imported)
+		importedNode := findOrObtain(imported)
 		importedNode.Deps = append(importedNode.Deps, node)
 		importedNode.Mutex.Unlock()
 		d.mutex.Lock()
@@ -163,7 +175,7 @@ func (d *DAG) Add(pkg *packages.Package, includeTests bool) (*Node, error) {
 
 	if includeTests && len(pkg.XTestGoFiles) > 0 {
 		importPathX := pkg.ImportPath + "_test"
-		nodeX := d.Obtain(importPathX)
+		nodeX := findOrObtain(importPathX)
 		defer nodeX.Mutex.Unlock()
 
 		if nodeX.NodeBits != nil {
@@ -172,6 +184,7 @@ func (d *DAG) Add(pkg *packages.Package, includeTests bool) (*Node, error) {
 
 		bitsX := &NodeBits{
 			Name:      pkg.Name + "_test",
+			CacheName: pkg.Name + "_test",
 			SourceDir: pkg.Dir,
 			RootDir:   pkg.Root,
 			Goroot:    pkg.Goroot,
@@ -200,7 +213,7 @@ func (d *DAG) Add(pkg *packages.Package, includeTests bool) (*Node, error) {
 			if imported == pkg.ImportPath {
 				importedNode = node
 			} else {
-				importedNode = d.Obtain(imported)
+				importedNode = findOrObtain(imported)
 			}
 			importedNode.Deps = append(importedNode.Deps, nodeX)
 			if imported != pkg.ImportPath {
@@ -248,34 +261,47 @@ func (d *DAG) Add(pkg *packages.Package, includeTests bool) (*Node, error) {
 // Obtain a Node by finding it or creating it and lock it.
 // Callers of Obtain must release the lock.
 func (d *DAG) Obtain(importPath string) *Node {
+	return d.ObtainByKey(NodeKey(importPath), importPath)
+}
+
+// ObtainByKey a Node by finding it or creating it and lock it.
+// Callers of Obtain must release the lock.
+func (d *DAG) ObtainByKey(nodeKey NodeKey, importPath string) *Node {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
-	node, ok := d.nodes[importPath]
+	node, ok := d.nodes[nodeKey]
 	if ok {
 		node.Mutex.Lock()
 		return node
 	}
 	node = &Node{
+		NodeKey:    nodeKey,
 		ImportPath: importPath,
 	}
 	node.Mutex.Lock()
-	d.nodes[importPath] = node
+	d.nodes[nodeKey] = node
 	return node
 }
 
 // Find a Node by finding it and lock it.
 // Callers of Find must release the lock.
 func (d *DAG) Find(importPath string) *Node {
+	return d.FindByKey(NodeKey(importPath))
+}
+
+// FindByKey a Node by finding it and lock it.
+// Callers of Find must release the lock.
+func (d *DAG) FindByKey(nodeKey NodeKey) *Node {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
-	if node, ok := d.nodes[importPath]; ok {
+	if node, ok := d.nodes[nodeKey]; ok {
 		node.Mutex.Lock()
 		return node
 	}
 	return nil
 }
 
-func (d *DAG) CheckComplete() error {
+func (d *DAG) CheckComplete(full bool) error {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
@@ -318,44 +344,38 @@ func (d *DAG) CheckComplete() error {
 		}
 	}
 
-	d.logger.Infof("checking for cycles")
-	d.mutex.Unlock()
-	err := d.CheckForCycles()
-	d.mutex.Lock()
-	if err != nil {
-		return errors.WithStack(err)
-	}
+	if full {
+		d.logger.Infof("checking all nodes are reachable from right")
+		d.mutex.Unlock()
+		countRight := int64(0)
+		err := d.VisitAllFromRight(context.Background(), VisitorFunc(func(ctx context.Context, n *Node) error {
+			atomic.AddInt64(&countRight, 1)
+			return nil
+		}))
+		d.mutex.Lock()
+		if err != nil {
+			return errors.WithStack(err)
+		}
 
-	d.logger.Infof("checking all nodes are reachable from right")
-	d.mutex.Unlock()
-	countRight := int64(0)
-	err = d.VisitAllFromRight(context.Background(), VisitorFunc(func(ctx context.Context, n *Node) error {
-		atomic.AddInt64(&countRight, 1)
-		return nil
-	}))
-	d.mutex.Lock()
-	if err != nil {
-		return errors.WithStack(err)
-	}
+		if int(countRight) != len(d.nodes) {
+			return fmt.Errorf("unable to visit all nodes from right")
+		}
 
-	if int(countRight) != len(d.nodes) {
-		return fmt.Errorf("unable to visit all nodes from right")
-	}
+		d.logger.Infof("checking all nodes are reachable from left")
+		d.mutex.Unlock()
+		countLeft := int64(0)
+		err = d.VisitAllFromRight(context.Background(), VisitorFunc(func(ctx context.Context, n *Node) error {
+			atomic.AddInt64(&countLeft, 1)
+			return nil
+		}))
+		d.mutex.Lock()
+		if err != nil {
+			return errors.WithStack(err)
+		}
 
-	d.logger.Infof("checking all nodes are reachable from left")
-	d.mutex.Unlock()
-	countLeft := int64(0)
-	err = d.VisitAllFromRight(context.Background(), VisitorFunc(func(ctx context.Context, n *Node) error {
-		atomic.AddInt64(&countLeft, 1)
-		return nil
-	}))
-	d.mutex.Lock()
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	if int(countLeft) != len(d.nodes) {
-		return fmt.Errorf("unable to visit all nodes from left")
+		if int(countLeft) != len(d.nodes) {
+			return fmt.Errorf("unable to visit all nodes from left")
+		}
 	}
 
 	return nil
@@ -402,16 +422,152 @@ func (d *DAG) CheckForCycles() error {
 		}
 		return fmt.Errorf("cycle errors found")
 	}
+	cyclicNodes := []*Node(nil)
+	for _, node := range d.nodes {
+		var err error
+		node.Mutex.RLock()
+		if node.CyclicTests {
+			cyclicNodes = append(cyclicNodes, node)
+		}
+		node.Mutex.RUnlock()
+		if err != nil {
+			return errors.WithStack(err)
+		}
+	}
+
+	d.mutex.Unlock()
+	for _, node := range cyclicNodes {
+		node.Mutex.Lock()
+
+		// Clone Isolated
+		isolatedKey := NodeKey(node.ImportPath + "+isolated")
+		isolated := d.ObtainByKey(isolatedKey, node.ImportPath)
+		isolated.Deps = nil
+		copyBits := *node.NodeBits
+		isolated.NodeBits = &copyBits
+		isolated.CyclicTests = false
+		isolated.LinkMode = AlwaysLink
+		isolated.Meta = append([]interface{}(nil), isolated.Meta...)
+		isolated.GoFiles = append([]GoFile(nil), isolated.GoFiles...)
+		isolated.SFiles = append([]SFile(nil), isolated.SFiles...)
+		isolated.Imports = append([]Import(nil), isolated.Imports...)
+		if isolated.ImportMap != nil {
+			copyMap := make(map[string]string)
+			for k, v := range isolated.ImportMap {
+				copyMap[k] = v
+			}
+			isolated.ImportMap = copyMap
+		}
+		for _, v := range isolated.Imports {
+			v.Mutex.Lock()
+			v.Deps = append(v.Deps, isolated)
+			v.Mutex.Unlock()
+		}
+
+		node.LinkMode = NeverLink
+		node.CyclicTests = false
+		node.Tests = false
+		node.CacheName = node.CacheName + "_compile"
+		if node.GoFiles != nil {
+			newGoFiles := []GoFile{}
+			for _, v := range node.GoFiles {
+				if !v.Test {
+					newGoFiles = append(newGoFiles, v)
+				}
+			}
+			node.GoFiles = newGoFiles
+		}
+		if node.Imports != nil {
+			importsToRemove := make(map[*Node]*Node)
+			for _, v := range node.Imports {
+				if v.Test {
+					importsToRemove[v.Node] = v.Node
+				}
+			}
+			for _, v := range node.Imports {
+				if !v.Test {
+					delete(importsToRemove, v.Node)
+				}
+			}
+
+			newImports := []Import(nil)
+			for _, v := range node.Imports {
+				if _, ok := importsToRemove[v.Node]; !ok {
+					newImports = append(newImports, v)
+					continue
+				}
+				v.Mutex.Lock()
+				newDeps := []*Node(nil)
+				for _, dep := range v.Deps {
+					if dep == node {
+						continue
+					}
+					newDeps = append(newDeps, dep)
+				}
+				v.Deps = newDeps
+				if len(v.Deps) == 0 {
+					d.leftLeaf[v.Node] = v.Node
+				} else {
+					delete(d.leftLeaf, v.Node)
+				}
+				v.Mutex.Unlock()
+			}
+			node.Imports = newImports
+		}
+
+		if node.Deps != nil {
+			newDeps := []*Node(nil)
+			for _, v := range node.Deps {
+				if v.ImportPath == node.ImportPath+"_test" {
+					v.Mutex.Lock()
+					for k, imp := range v.Imports {
+						if imp.Node == node {
+							imp.Node = isolated
+							isolated.Deps = append(isolated.Deps, v)
+							v.Imports[k] = imp
+						}
+					}
+					v.Mutex.Unlock()
+					continue
+				}
+				newDeps = append(newDeps, v)
+			}
+			node.Deps = newDeps
+		}
+
+		if len(isolated.Deps) == 0 {
+			d.leftLeaf[isolated] = isolated
+		} else {
+			delete(d.leftLeaf, isolated)
+		}
+		if len(node.Deps) == 0 {
+			d.leftLeaf[node] = node
+		} else {
+			delete(d.leftLeaf, node)
+		}
+
+		if len(isolated.Imports) == 0 {
+			d.rightLeaf[isolated] = isolated
+		} else {
+			delete(d.rightLeaf, isolated)
+		}
+		if len(node.Imports) == 0 {
+			d.rightLeaf[node] = node
+		} else {
+			delete(d.rightLeaf, node)
+		}
+
+		isolated.Mutex.Unlock()
+		node.Mutex.Unlock()
+	}
+	d.mutex.Lock()
+
 	return nil
 }
 
 func (d *DAG) checkForCycles(top *Node, node Import) error {
 	if top == node.Node {
-		t := ""
-		if node.Test {
-			t = "t: "
-		}
-		return &cycleError{imports: []string{t + node.ImportPath}}
+		return &cycleError{imports: []string{node.ImportPath}}
 	}
 	node.Mutex.Lock()
 	if node.flagGeneration != d.flagGeneration {
@@ -428,11 +584,16 @@ func (d *DAG) checkForCycles(top *Node, node Import) error {
 	for _, imported := range importCopy {
 		err := d.checkForCycles(top, imported)
 		if c, ok := err.(*cycleError); ok {
-			t := ""
-			if node.Test {
-				t = "t: "
+			if imported.Test {
+				node.Mutex.Lock()
+				if !node.CyclicTests {
+					d.logger.Infof("package %q needs to be isolated", node.ImportPath)
+					node.CyclicTests = true
+				}
+				node.Mutex.Unlock()
+				continue
 			}
-			c.imports = append(c.imports, t+node.ImportPath)
+			c.imports = append(c.imports, node.ImportPath)
 			return c
 		} else if err != nil {
 			return err
@@ -570,7 +731,7 @@ func (d *DAG) visitAll(ctx context.Context,
 					if _, ok := alreadyAdded[dep]; ok {
 						continue
 					}
-					if _, ok := d.nodes[dep.ImportPath]; !ok {
+					if _, ok := d.nodes[dep.NodeKey]; !ok {
 						continue
 					}
 					alreadyAdded[dep] = struct{}{}
@@ -584,7 +745,7 @@ func (d *DAG) visitAll(ctx context.Context,
 					if _, ok := alreadyAdded[imported.Node]; ok {
 						continue
 					}
-					if _, ok := d.nodes[imported.ImportPath]; !ok {
+					if _, ok := d.nodes[imported.NodeKey]; !ok {
 						continue
 					}
 					alreadyAdded[imported.Node] = struct{}{}

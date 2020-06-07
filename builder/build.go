@@ -62,6 +62,10 @@ func (b *Builder) Visit(ctx context.Context, node *dag.Node) error {
 		return nil
 	}
 
+	if len(node.Deps) == 0 && node.LinkMode != dag.AlwaysLink {
+		return nil
+	}
+
 	b.Logger.Infof("building %q", node.ImportPath)
 
 	bi := &BuildInfo{}
@@ -118,15 +122,15 @@ func (b *Builder) Visit(ctx context.Context, node *dag.Node) error {
 	}
 
 	bi.HasASM = len(node.SFiles) > 0
-	bi.IncludeDir = path.Join(bi.WorkDir, fmt.Sprintf("include_%s", node.Name))
+	bi.IncludeDir = path.Join(bi.WorkDir, fmt.Sprintf("include_%s", node.CacheName))
 	err = os.MkdirAll(bi.IncludeDir, 0777)
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	bi.ObjFile = path.Join(bi.WorkDir, fmt.Sprintf("%s.obj", node.Name))
+	bi.ObjFile = path.Join(bi.WorkDir, fmt.Sprintf("%s.obj", node.CacheName))
 	bi.ASMImportFile = path.Join(bi.IncludeDir, "go_asm.h")
-	bi.SymABIsFile = path.Join(bi.WorkDir, fmt.Sprintf("%s_symabis", node.Name))
-	bi.ImportConfigFile = path.Join(bi.WorkDir, fmt.Sprintf("%s_importcfg", node.Name))
+	bi.SymABIsFile = path.Join(bi.WorkDir, fmt.Sprintf("%s_symabis", node.CacheName))
+	bi.ImportConfigFile = path.Join(bi.WorkDir, fmt.Sprintf("%s_importcfg", node.CacheName))
 
 	// GOROOT non-domain packages are considered std lib packages by gc.
 	bi.CompilingStandardLibrary = node.Goroot && !strings.Contains(strings.Split(node.ImportPath, "/")[0], ".")

@@ -55,7 +55,7 @@ func (s *Storer) Visit(ctx context.Context, node *dag.Node) (errOut error) {
 		return errors.WithStack(err)
 	}
 
-	manifestFilepath := path.Join(cacheDir, fmt.Sprintf("%s.manifest", node.Name))
+	manifestFilepath := path.Join(cacheDir, fmt.Sprintf("%s.manifest", node.CacheName))
 	if _, err := os.Stat(manifestFilepath); os.IsNotExist(err) {
 		// Do nothing
 	} else if err != nil {
@@ -98,7 +98,7 @@ func (s *Storer) Visit(ctx context.Context, node *dag.Node) (errOut error) {
 		}
 	}()
 
-	objFilename := fmt.Sprintf("%s.obj", node.Name)
+	objFilename := fmt.Sprintf("%s.obj", node.CacheName)
 	_, err = fmt.Fprintln(manifestFile, objFilename)
 	if err != nil {
 		return errors.WithStack(err)

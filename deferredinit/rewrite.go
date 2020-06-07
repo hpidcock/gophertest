@@ -362,69 +362,87 @@ func (d *DeferredIniter) transformPkg(ctx context.Context, pkg *packages.Package
 							return true
 						}
 					case *ast.ValueSpec:
-						initIndex := math.MaxInt64
-						for _, name := range n.Names {
-							if index, ok := identToOrder[name]; ok {
-								if index < initIndex {
-									initIndex = index
-								}
-							}
-						}
-						assignment := &ast.AssignStmt{
-							Tok: token.ASSIGN,
-						}
-						for _, lhs := range n.Names {
-							assignment.Lhs = append(assignment.Lhs, lhs)
-						}
-						for _, rhs := range n.Values {
-							assignment.Rhs = append(assignment.Rhs, rhs)
-						}
-						if n.Values != nil {
-							value := n.Values[0]
+						replacements := []ast.Node(nil)
+						names := append([]*ast.Ident(nil), n.Names...)
+						for _, value := range n.Values {
 							ti := pkg.TypesInfo
-							expr := n.Type
-							if expr == nil {
+							expr := []ast.Expr(nil)
+							if n.Type != nil {
+								expr = append(expr, n.Type)
+							} else {
 								tv := ti.TypeOf(value)
 								expr = resolveType(fstate, tv, f, value.Pos())
 							}
-							if expr != nil {
-								c.Replace(&ast.ValueSpec{
-									Names:   n.Names,
+
+							localNames := names[:len(expr)]
+							names = names[len(expr):]
+
+							// Variable Decl
+							for i, e := range expr {
+								replacements = append(replacements, &ast.ValueSpec{
+									Names:   []*ast.Ident{localNames[i]},
 									Comment: n.Comment,
 									Doc:     n.Doc,
-									Type:    expr,
+									Type:    e,
 									Values:  nil,
 								})
+							}
 
-								funcName := state.NextInitName()
-								fn := &ast.FuncDecl{
-									Name: &ast.Ident{
-										Name: funcName,
-									},
-									Body: &ast.BlockStmt{
-										List: []ast.Stmt{
-											assignment,
-										},
-									},
-									Type: &ast.FuncType{
-										Params:  &ast.FieldList{},
-										Results: &ast.FieldList{},
-									},
+							// Assignment
+							initIndex := math.MaxInt64
+							for _, name := range localNames {
+								if index, ok := identToOrder[name]; ok {
+									if index < initIndex {
+										initIndex = index
+									}
 								}
-								addedDecls = append(addedDecls, fn)
-								mut.Lock()
-								assignments = append(assignments, initAssign{
-									order:   initIndex,
-									srcFile: f,
-									statement: &ast.ExprStmt{
-										X: &ast.CallExpr{
-											Fun: &ast.Ident{
-												Name: funcName,
-											},
+							}
+							assignment := &ast.AssignStmt{
+								Tok: token.ASSIGN,
+							}
+							for _, lhs := range localNames {
+								assignment.Lhs = append(assignment.Lhs, lhs)
+							}
+							assignment.Rhs = append(assignment.Rhs, value)
+							funcName := state.NextInitName()
+							fn := &ast.FuncDecl{
+								Name: &ast.Ident{
+									Name: funcName,
+								},
+								Body: &ast.BlockStmt{
+									List: []ast.Stmt{
+										assignment,
+									},
+								},
+								Type: &ast.FuncType{
+									Params:  &ast.FieldList{},
+									Results: &ast.FieldList{},
+								},
+							}
+							addedDecls = append(addedDecls, fn)
+							mut.Lock()
+							assignments = append(assignments, initAssign{
+								order:   initIndex,
+								srcFile: f,
+								statement: &ast.ExprStmt{
+									X: &ast.CallExpr{
+										Fun: &ast.Ident{
+											Name: funcName,
 										},
 									},
-								})
-								mut.Unlock()
+								},
+							})
+							mut.Unlock()
+						}
+
+						if replacements != nil {
+							first := replacements[0]
+							c.Replace(first)
+							// Insert the rest after the first in reverse order
+							// because we can only insert after the first.
+							replacements = replacements[1:]
+							for i := len(replacements) - 1; i >= 0; i-- {
+								c.InsertAfter(replacements[i])
 							}
 						}
 					}
@@ -545,64 +563,72 @@ func (d *DeferredIniter) transformPkg(ctx context.Context, pkg *packages.Package
 	return newFiles, uniqueTestImports, nil
 }
 
-func resolveType(state *fileTransformState, decl types.Type, f *ast.File, pos token.Pos) ast.Expr {
+func resolveOneType(state *fileTransformState, decl types.Type, f *ast.File, pos token.Pos) ast.Expr {
+	expr := resolveType(state, decl, f, pos)
+	if len(expr) != 1 {
+		log.Fatalf("too many expression @ %s %#v", state.Pkg.Fset.Position(pos), decl)
+	}
+	return expr[0]
+}
+
+func resolveType(state *fileTransformState, decl types.Type, f *ast.File, pos token.Pos) []ast.Expr {
 	switch t := decl.(type) {
 	case *types.Basic:
-		return &ast.Ident{
+		return []ast.Expr{&ast.Ident{
 			Name: t.Name(),
-		}
+		}}
 	case *types.Named:
 		objPkg := t.Obj().Pkg()
 		if objPkg != nil {
 			if objPkg.Path() == state.Pkg.PkgPath {
-				return &ast.Ident{
+				return []ast.Expr{&ast.Ident{
 					Name: t.Obj().Name(),
 					Obj: &ast.Object{
 						Kind: ast.Typ,
 						Name: t.Obj().Name(),
 					},
-				}
+				}}
 			}
 		} else {
 			// Probably a builtin.
-			return &ast.Ident{
+			return []ast.Expr{&ast.Ident{
 				Name: t.Obj().Name(),
-			}
+			}}
 		}
 
 		name := findOrAddImport(state, f, objPkg.Path())
-		return &ast.SelectorExpr{
+		return []ast.Expr{&ast.SelectorExpr{
 			X: &ast.Ident{
 				Name: name,
 			},
 			Sel: &ast.Ident{
 				Name: t.Obj().Name(),
 			},
-		}
+		}}
 	case *types.Pointer:
-		return &ast.StarExpr{
-			X: resolveType(state, t.Elem(), f, pos),
-		}
+		return []ast.Expr{&ast.StarExpr{
+			X: resolveOneType(state, t.Elem(), f, pos),
+		}}
 	case *types.Slice:
-		return &ast.ArrayType{
-			Elt: resolveType(state, t.Elem(), f, pos),
-		}
+		return []ast.Expr{&ast.ArrayType{
+			Elt: resolveOneType(state, t.Elem(), f, pos),
+		}}
 	case *types.Array:
-		return &ast.ArrayType{
-			Elt: resolveType(state, t.Elem(), f, pos),
+		return []ast.Expr{&ast.ArrayType{
+			Elt: resolveOneType(state, t.Elem(), f, pos),
 			Len: &ast.BasicLit{
 				Kind:  token.INT,
 				Value: strconv.FormatInt(t.Len(), 10),
 			},
-		}
+		}}
 	case *types.Map:
-		return &ast.MapType{
-			Key:   resolveType(state, t.Key(), f, pos),
-			Value: resolveType(state, t.Elem(), f, pos),
-		}
+		return []ast.Expr{&ast.MapType{
+			Key:   resolveOneType(state, t.Key(), f, pos),
+			Value: resolveOneType(state, t.Elem(), f, pos),
+		}}
 	case *types.Chan:
 		v := &ast.ChanType{
-			Value: resolveType(state, t.Elem(), f, pos),
+			Value: resolveOneType(state, t.Elem(), f, pos),
 		}
 		switch t.Dir() {
 		case types.SendRecv:
@@ -612,7 +638,7 @@ func resolveType(state *fileTransformState, decl types.Type, f *ast.File, pos to
 		case types.RecvOnly:
 			v.Dir = ast.RECV
 		}
-		return v
+		return []ast.Expr{v}
 	case *types.Interface:
 		v := &ast.InterfaceType{
 			Methods: &ast.FieldList{},
@@ -623,10 +649,10 @@ func resolveType(state *fileTransformState, decl types.Type, f *ast.File, pos to
 				Names: []*ast.Ident{{
 					Name: fn.Name(),
 				}},
-				Type: resolveType(state, fn.Type(), f, pos),
+				Type: resolveOneType(state, fn.Type(), f, pos),
 			})
 		}
-		return v
+		return []ast.Expr{v}
 	case *types.Struct:
 		v := &ast.StructType{
 			Fields: &ast.FieldList{},
@@ -641,10 +667,10 @@ func resolveType(state *fileTransformState, decl types.Type, f *ast.File, pos to
 			}
 			v.Fields.List = append(v.Fields.List, &ast.Field{
 				Names: names,
-				Type:  resolveType(state, field.Type(), f, pos),
+				Type:  resolveOneType(state, field.Type(), f, pos),
 			})
 		}
-		return v
+		return []ast.Expr{v}
 	case *types.Signature:
 		v := &ast.FuncType{
 			Params:  &ast.FieldList{},
@@ -672,7 +698,7 @@ func resolveType(state *fileTransformState, decl types.Type, f *ast.File, pos to
 						Name: name,
 					}},
 					Type: &ast.Ellipsis{
-						Elt: resolveType(state, elem, f, pos),
+						Elt: resolveOneType(state, elem, f, pos),
 					},
 				})
 			} else {
@@ -684,7 +710,7 @@ func resolveType(state *fileTransformState, decl types.Type, f *ast.File, pos to
 					Names: []*ast.Ident{{
 						Name: name,
 					}},
-					Type: resolveType(state, e.Type(), f, pos),
+					Type: resolveOneType(state, e.Type(), f, pos),
 				})
 			}
 		}
@@ -695,10 +721,18 @@ func resolveType(state *fileTransformState, decl types.Type, f *ast.File, pos to
 				Names: []*ast.Ident{{
 					Name: e.Name(),
 				}},
-				Type: resolveType(state, e.Type(), f, pos),
+				Type: resolveOneType(state, e.Type(), f, pos),
 			})
 		}
-		return v
+		return []ast.Expr{v}
+	case *types.Tuple:
+		expressions := []ast.Expr(nil)
+		for i := 0; i < t.Len(); i++ {
+			e := t.At(i)
+			expressions = append(expressions,
+				resolveOneType(state, e.Type(), f, pos))
+		}
+		return expressions
 	default:
 		log.Fatalf("unhandled @ %s %#v", state.Pkg.Fset.Position(pos), decl)
 	}
