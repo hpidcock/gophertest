@@ -36,7 +36,7 @@ var (
 	srcDir   = ""
 	outFile  = ""
 	pkgDir   = path.Join(runtime.GOROOT(), "pkg")
-	buildCtx = gobuild.Default
+	buildCtx gobuild.Context
 	tools    = build.DefaultTools
 )
 
@@ -62,24 +62,9 @@ func main() {
 func Main() (errOut error) {
 	var err error
 
-	buildCtx.GOARCH = env("GOARCH", buildCtx.GOARCH)
-	buildCtx.GOOS = env("GOOS", buildCtx.GOOS)
-	// For now we don't support cgo.
-	buildCtx.CgoEnabled = false
-	buildCtx.UseAllFiles = false
-	err = os.Setenv("CGO_ENABLED", "0")
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
 	wd, err := os.Getwd()
 	if err != nil {
 		return errors.WithStack(err)
-	}
-
-	cacheDir, err = util.CacheDir(buildCtx)
-	if err != nil {
-		return errors.Wrap(err, "creating cache dir")
 	}
 
 	flag.Parse()
@@ -152,6 +137,30 @@ func Main() (errOut error) {
 	if len(testPackages) == 0 {
 		fmt.Fprintf(os.Stderr, "no packages to build")
 		os.Exit(-1)
+	}
+
+	buildCtx, err = tools.BuildCtx()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	// For now we don't support cgo.
+	buildCtx.CgoEnabled = false
+	buildCtx.UseAllFiles = false
+	err = os.Setenv("CGO_ENABLED", "0")
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	logger.Infof("GOARCH=%q", buildCtx.GOARCH)
+	logger.Infof("GOOS=%q", buildCtx.GOOS)
+	logger.Infof("GOROOT=%q", buildCtx.GOROOT)
+	logger.Infof("GOPATH=%q", buildCtx.GOPATH)
+	logger.Infof("CGO_ENABLED=0")
+
+	cacheDir, err = util.CacheDir(buildCtx)
+	if err != nil {
+		return errors.Wrap(err, "creating cache dir")
 	}
 
 	lock, err := util.LockDirectory(cacheDir)

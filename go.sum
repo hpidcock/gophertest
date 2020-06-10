@@ -19,6 +19,10 @@ github.com/gophertest/build v0.0.0-20200516070533-32c8b00616c1 h1:K4FYHD4/4JRN27
 github.com/gophertest/build v0.0.0-20200516070533-32c8b00616c1/go.mod h1:2IXxYH8f08Z35rtHf1QWx60lvwB6xdA6wO9PktB5TIc=
 github.com/gophertest/build v0.0.0-20200519103116-ad86096d40b2 h1:wxpskpLbit+STc6QYlmZLAbOfVm7BOU7l2mK9EhAxKQ=
 github.com/gophertest/build v0.0.0-20200519103116-ad86096d40b2/go.mod h1:2IXxYH8f08Z35rtHf1QWx60lvwB6xdA6wO9PktB5TIc=
+github.com/gophertest/build v0.0.0-20200610222449-b530818931c3 h1:FcULpFVLP7MYBZwgLMFqevfRRNsszkgSu4W+79FKIVs=
+github.com/gophertest/build v0.0.0-20200610222449-b530818931c3/go.mod h1:2IXxYH8f08Z35rtHf1QWx60lvwB6xdA6wO9PktB5TIc=
+github.com/gophertest/build v0.0.0-20200610222947-a6cd5537ed7b h1:W+T6bHSId31ZcTI9mZZG6BTwpZjYEeqoKOGXHLa/DCM=
+github.com/gophertest/build v0.0.0-20200610222947-a6cd5537ed7b/go.mod h1:2IXxYH8f08Z35rtHf1QWx60lvwB6xdA6wO9PktB5TIc=
 github.com/nightlyone/lockfile v1.0.0 h1:RHep2cFKK4PonZJDdEl4GmkabuhbsRMgk/k3uAmxBiA=
 github.com/nightlyone/lockfile v1.0.0/go.mod h1:rywoIealpdNse2r832aiD9jRk8ErCatROs6LzC841CI=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
