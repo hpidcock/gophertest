@@ -91,6 +91,9 @@ func (l *Linker) Visit(ctx context.Context, node *dag.Node) error {
 		ImportConfigFile: importConfigFile,
 		OutputFile:       l.OutFile,
 		Files:            []string{node.Shlib},
+		StringDefines: []string{
+			"runtime/internal/sys.DefaultGoroot=" + l.BuildCtx.GOROOT,
+		},
 	}
 	err = l.Tools.Link(args)
 	if err != nil {
