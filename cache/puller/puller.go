@@ -74,7 +74,8 @@ func (p *Puller) Visit(ctx context.Context, node *dag.Node) error {
 		Write:      false,
 	})
 	if err != nil {
-		return errors.WithStack(err)
+		p.Logger.Infof("failed to read build id for %q: %s", node.Name, err.Error())
+		return nil
 	}
 	if !strings.Contains(readBuildID, buildID) {
 		return nil

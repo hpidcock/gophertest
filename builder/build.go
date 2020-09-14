@@ -317,7 +317,7 @@ func (b *Builder) build(ctx context.Context, node *dag.Node, bi *BuildInfo) erro
 	}
 	err = b.Tools.Compile(args)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed compiling: %v", out)
+		fmt.Fprintf(os.Stderr, "failed compiling %s: %v", node.ImportPath, out)
 		return errors.WithStack(err)
 	}
 	return nil
